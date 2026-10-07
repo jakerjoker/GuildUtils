@@ -1,0 +1,11 @@
+## Interface: 16001
+## Title: GuildUtils
+## Notes: Comprehensive guild management, P2P syncing, and priority loot bidding.
+## Author: Jacob McLeod
+## Version: 1.0.0
+## SavedVariables: GuildUtilsDB
+
+GuildUtils.lua
+LootCoin.lua
+LedgerUI.lua
+PartyRoller.lua
