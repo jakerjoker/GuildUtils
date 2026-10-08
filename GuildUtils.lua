@@ -92,8 +92,14 @@ GuildUtils.frame:SetScript("OnEvent", function(self, event, ...)
     elseif event == "CHAT_MSG_ADDON" then
         local prefix, text, channel, sender = ...
         if prefix == "GU_SYNC" then
-            local senderName = strsplit("-", sender)
-            if senderName == UnitName("player") and not GuildUtils.SoloMode then return end
+            -- NATIVE ECHO KILLER: Uses WoW's built-in unit checker to perfectly identify if the packet came from you
+            if UnitIsUnit(sender, "player") and not GuildUtils.SoloMode then return end
+            
+            -- Fallback string match in case UnitIsUnit fails on cross-realm edge cases
+            local senderName = strtrim((strsplit("-", sender)))
+            local myName = strtrim((strsplit("-", UnitName("player"))))
+            if senderName == myName and not GuildUtils.SoloMode then return end
+            
             GuildUtils:HandleSyncMessage(senderName, text)
         end
     end
@@ -144,6 +150,11 @@ function GuildUtils:HandleSyncMessage(senderName, text)
     elseif command == "TOGGLE_FREEZE" then
         local tGuid, tName = strsplit(":", payload)
         GuildUtils.LootCoin:ToggleManagementFreeze(tGuid, tName, true)
+    elseif command == "SET_FREEZE" then
+        local tGuid, tName, tState = strsplit(":", payload)
+        -- STRIP invisible network characters that were poisoning the payload
+        tState = tostring(tState or ""):gsub("%s+", "")
+        GuildUtils.LootCoin:ToggleManagementFreeze(tGuid, tName, true, tState)
     elseif command == "MERGE_ACK" then GuildUtils.LootCoin:ReceiveMergeAck(payload)
     elseif command == "NOTIFY_GROUP" then
         if payload == "START" then

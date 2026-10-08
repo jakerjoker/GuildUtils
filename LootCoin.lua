@@ -125,20 +125,45 @@ hooksecurefunc(GuildUtils.LootCoin, "ProcessTransaction", function(self, guid, p
     end
 end)
 
-function GuildUtils.LootCoin:ToggleManagementFreeze(guid, playerName, fromSync)
+-- Absolute State Network Implementation
+function GuildUtils.LootCoin:ToggleManagementFreeze(guid, playerName, fromSync, targetState)
     self:Initialize()
     if not GuildUtilsDB.Ledger.frozenAccounts then GuildUtilsDB.Ledger.frozenAccounts = {} end
     
-    if GuildUtilsDB.Ledger.frozenAccounts[guid] == "F" then
-        GuildUtilsDB.Ledger.frozenAccounts[guid] = nil
-        if not fromSync then GuildUtils:Print("Management freeze |F| lifted for " .. playerName, false) end
+    guid = tostring(guid or ""):gsub("%s+", "")
+    if guid == "" then return end
+
+    local isCurrentlyFrozen = (GuildUtilsDB.Ledger.frozenAccounts[guid] == "F")
+
+    if fromSync then
+        -- STRIP invisible network characters (this was causing the bug)
+        targetState = tostring(targetState or ""):gsub("%s+", "")
+        
+        -- Process absolute state payload (1 = Freeze, 0 = Unfreeze)
+        if targetState == "1" then
+            GuildUtilsDB.Ledger.frozenAccounts[guid] = "F"
+        elseif targetState == "0" then
+            GuildUtilsDB.Ledger.frozenAccounts[guid] = nil
+        else
+            -- Fallback for legacy blind toggles from un-updated guild members
+            GuildUtilsDB.Ledger.frozenAccounts[guid] = isCurrentlyFrozen and nil or "F"
+        end
     else
-        GuildUtilsDB.Ledger.frozenAccounts[guid] = "F"
-        if not fromSync then GuildUtils:Print("Management freeze |F| applied to " .. playerName, true) end
-    end
-    
-    if not fromSync and not GuildUtils.SoloMode then
-        GuildUtils:SendSync("TOGGLE_FREEZE:" .. guid .. ":" .. playerName, "GUILD")
+        -- Initiate Local Click: Set the absolute target state we want
+        local newState = isCurrentlyFrozen and "0" or "1"
+        
+        if newState == "1" then
+            GuildUtilsDB.Ledger.frozenAccounts[guid] = "F"
+            GuildUtils:Print("Management freeze |F| applied to " .. tostring(playerName), true)
+        else
+            GuildUtilsDB.Ledger.frozenAccounts[guid] = nil
+            GuildUtils:Print("Management freeze |F| lifted for " .. tostring(playerName), false)
+        end
+        
+        -- Broadcast the absolute state to the guild
+        if not GuildUtils.SoloMode then
+            GuildUtils:SendSync("SET_FREEZE:" .. guid .. ":" .. tostring(playerName) .. ":" .. newState, "GUILD")
+        end
     end
     
     if GuildUtils.LedgerFrame and GuildUtils.LedgerFrame:IsShown() then 

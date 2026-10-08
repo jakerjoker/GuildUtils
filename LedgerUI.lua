@@ -3,6 +3,40 @@ local addonName, GuildUtils = ...
 GuildUtils.LedgerRows = {}
 GuildUtils.AuditRows = {}
 
+-- Define the reusable right-click context menu
+if not GuildUtils.ContextMenu then
+    local menu = CreateFrame("Frame", "GuildUtilsLedgerMenu", UIParent, "BackdropTemplate")
+    menu:SetSize(150, 130)
+    menu:SetFrameStrata("TOOLTIP") -- Ensures it renders above all other windows
+    menu:SetBackdrop({
+        bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        tile = true, tileSize = 16, edgeSize = 16,
+        insets = { left = 4, right = 4, top = 4, bottom = 4 }
+    })
+    menu:Hide()
+    
+    menu.title = menu:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    menu.title:SetPoint("TOP", 0, -10)
+    
+    local function CreateMenuButton(text, yOffset)
+        local btn = CreateFrame("Button", nil, menu, "GameMenuButtonTemplate")
+        btn:SetSize(120, 22)
+        btn:SetPoint("TOP", 0, yOffset)
+        btn:SetText(text)
+        return btn
+    end
+    
+    menu.btnAdd = CreateMenuButton("Add LC", -30)
+    menu.btnSub = CreateMenuButton("Subtract LC", -55)
+    menu.btnFreeze = CreateMenuButton("Toggle Freeze", -80)
+    
+    menu.btnCancel = CreateMenuButton("Cancel", -105)
+    menu.btnCancel:SetScript("OnClick", function() menu:Hide() end)
+
+    GuildUtils.ContextMenu = menu
+end
+
 function GuildUtils:ToggleLedgerUI()
     if not self.LedgerFrame then
         self.LedgerFrame = CreateFrame("Frame", "GuildUtilsLedgerFrame", UIParent, "BasicFrameTemplateWithInset")
@@ -134,18 +168,9 @@ function GuildUtils:UpdateLedgerDisplay(searchQuery)
                     row.nameText = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
                     row.nameText:SetPoint("LEFT", 5, 0)
                     
+                    -- Shifted right to fill the space left by removed buttons
                     row.balText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-                    row.balText:SetPoint("RIGHT", -120, 0)
-                    
-                    row.freezeBtn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
-                    row.freezeBtn:SetSize(50, 20)
-                    row.freezeBtn:SetPoint("RIGHT", -65, 0)
-                    row.freezeBtn:SetText("Freeze")
-                    
-                    row.modBtn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
-                    row.modBtn:SetSize(55, 20)
-                    row.modBtn:SetPoint("RIGHT", -5, 0)
-                    row.modBtn:SetText("Mod +/-")
+                    row.balText:SetPoint("RIGHT", -20, 0) 
                     
                     GuildUtils.LedgerRows[rowIndex] = row
                 end
@@ -160,24 +185,62 @@ function GuildUtils:UpdateLedgerDisplay(searchQuery)
                 end
                 row.balText:SetText(balDisplay)
                 
-                row.freezeBtn:SetScript("OnClick", function()
-                    if GuildUtils.LootCoin then GuildUtils.LootCoin:ToggleManagementFreeze(data.guid, data.name, false) end
-                end)
-                
-                row.modBtn:SetScript("OnClick", function()
-                    StaticPopupDialogs["GUILDUTILS_MOD_BALANCE"] = {
-                        text = "Modify LC for " .. data.name .. "\n(Use negative numbers to deduct):",
-                        button1 = "Apply", button2 = "Cancel",
-                        hasEditBox = true, maxLetters = 6,
-                        OnAccept = function(self)
-                            local amt = tonumber(self.EditBox:GetText())
-                            if amt and GuildUtils.LootCoin then
-                                GuildUtils.LootCoin:ProcessTransaction(data.guid, data.name, amt, "Manual Adjustment")
+                -- Context Menu (Right-Click) Binding
+                row:EnableMouse(true)
+                row:SetScript("OnMouseDown", function(self, button)
+                    if button == "RightButton" then
+                        local menu = GuildUtils.ContextMenu
+                        menu.title:SetText(data.name)
+                        
+                        menu.btnAdd:SetScript("OnClick", function()
+                            menu:Hide()
+                            StaticPopupDialogs["GUILDUTILS_ADD_BALANCE"] = {
+                                text = "Add LC for " .. data.name .. ":",
+                                button1 = "Add", button2 = "Cancel",
+                                hasEditBox = true, maxLetters = 6,
+                                OnAccept = function(selfPopup)
+                                    local amt = tonumber(selfPopup.EditBox:GetText())
+                                    if amt and GuildUtils.LootCoin then
+                                        GuildUtils.LootCoin:ProcessTransaction(data.guid, data.name, math.abs(amt), "Manual Addition")
+                                    end
+                                end,
+                                timeout = 0, whileDead = true, hideOnEscape = true,
+                            }
+                            StaticPopup_Show("GUILDUTILS_ADD_BALANCE")
+                        end)
+                        
+                        menu.btnSub:SetScript("OnClick", function()
+                            menu:Hide()
+                            StaticPopupDialogs["GUILDUTILS_SUB_BALANCE"] = {
+                                text = "Subtract LC from " .. data.name .. ":",
+                                button1 = "Subtract", button2 = "Cancel",
+                                hasEditBox = true, maxLetters = 6,
+                                OnAccept = function(selfPopup)
+                                    local amt = tonumber(selfPopup.EditBox:GetText())
+                                    if amt and GuildUtils.LootCoin then
+                                        GuildUtils.LootCoin:ProcessTransaction(data.guid, data.name, -math.abs(amt), "Manual Deduction")
+                                    end
+                                end,
+                                timeout = 0, whileDead = true, hideOnEscape = true,
+                            }
+                            StaticPopup_Show("GUILDUTILS_SUB_BALANCE")
+                        end)
+                        
+                        menu.btnFreeze:SetScript("OnClick", function()
+                            menu:Hide()
+                            if GuildUtils.LootCoin then 
+                                local currentlyFrozen = GuildUtilsDB.Ledger.frozenAccounts and GuildUtilsDB.Ledger.frozenAccounts[data.guid] == "F"
+                                local targetState = currentlyFrozen and "0" or "1"
+                                GuildUtils.LootCoin:ToggleManagementFreeze(data.guid, data.name, false, targetState) 
                             end
-                        end,
-                        timeout = 0, whileDead = true, hideOnEscape = true,
-                    }
-                    StaticPopup_Show("GUILDUTILS_MOD_BALANCE")
+                        end)
+                        
+                        local x, y = GetCursorPosition()
+                        local scale = UIParent:GetEffectiveScale()
+                        menu:ClearAllPoints()
+                        menu:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", x / scale, y / scale)
+                        menu:Show()
+                    end
                 end)
                 
                 row:Show()
