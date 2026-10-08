@@ -10,6 +10,112 @@ GuildUtils.SoloMode = false
 GuildUtils.OutboundQueue = {}
 GuildUtils.SyncThrottleTimer = nil
 
+-- ============================================================================
+-- STRUCTURAL STYLE ENGINE
+-- ============================================================================
+GuildUtils.Styles = {
+    [1] = { 
+        name = "Blizzard Classic", 
+        backdrop = {
+            edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+            tile = false, tileSize = 32, edgeSize = 32,
+            insets = { left = 11, right = 12, top = 12, bottom = 11 }
+        },
+        bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+        bgColor = {1, 1, 1, 1},
+        borderColor = {1, 1, 1, 1},
+        titleColor = {1, 0.82, 0, 1},
+        nameColor = {1, 0.82, 0, 1},
+        balColor = {1, 1, 1, 1},
+        texCoords = {0, 1, 0, 1}
+    },
+    [2] = { 
+        name = "Modern Flat", 
+        backdrop = {
+            edgeFile = "Interface\\Buttons\\WHITE8x8",
+            tile = false, tileSize = 0, edgeSize = 1,
+            insets = { left = 1, right = 1, top = 1, bottom = 1 }
+        },
+        bgFile = "Interface\\Buttons\\WHITE8x8",
+        bgColor = {0.1, 0.1, 0.1, 0.95},
+        borderColor = {0, 0, 0, 1},
+        titleColor = {1, 1, 1, 1},
+        nameColor = {0.9, 0.8, 0.2, 1},
+        balColor = {1, 1, 1, 1},
+        texCoords = {0, 1, 0, 1}
+    },
+    [3] = { 
+        name = "Floating Scroll", 
+        backdrop = nil,
+        bgFile = "Interface\\QuestFrame\\QuestBG",
+        bgColor = {1, 1, 1, 1},
+        borderColor = {0, 0, 0, 0}, 
+        titleColor = {0.2, 0.1, 0.05, 1},
+        nameColor = {0, 0, 0, 1},
+        balColor = {0.15, 0.1, 0.05, 1},
+        texCoords = {0, 0.58, 0, 0.65}
+    }
+}
+
+function GuildUtils:ApplyTheme()
+    if not GuildUtilsDB then GuildUtilsDB = {} end
+    local themeIndex = GuildUtilsDB.Theme or 1
+    local style = GuildUtils.Styles[themeIndex] or GuildUtils.Styles[1]
+
+    local function ApplyStyleToFrame(f)
+        if not f then return end
+        
+        -- Fix window layering strata so they sit cleanly above background UI
+        f:SetFrameStrata("HIGH")
+        f:SetToplevel(true)
+        f:EnableMouse(true)
+        f:SetScript("OnMouseDown", function(self)
+            self:Raise()
+        end)
+        
+        if f.SetBackdrop then
+            if style.backdrop then
+                f:SetBackdrop(style.backdrop)
+                f:SetBackdropBorderColor(unpack(style.borderColor))
+            else
+                f:SetBackdrop(nil)
+            end
+        end
+        
+        if f.BgTexture then
+            f.BgTexture:SetTexture(style.bgFile)
+            f.BgTexture:SetVertexColor(unpack(style.bgColor))
+            if style.texCoords then
+                f.BgTexture:SetTexCoord(unpack(style.texCoords))
+            else
+                f.BgTexture:SetTexCoord(0, 1, 0, 1)
+            end
+        end
+        
+        if f.title then f.title:SetTextColor(unpack(style.titleColor)) end
+        
+        if f == GuildUtils.LedgerFrame then
+            if f.hostLabel then f.hostLabel:SetTextColor(unpack(style.nameColor)) end
+        end
+        if GuildUtils.PartyRoller and f == GuildUtils.PartyRoller.frame then
+            if f.IdlePanel and f.IdlePanel.info then f.IdlePanel.info:SetTextColor(unpack(style.nameColor)) end
+            if f.IdlePanel and f.IdlePanel.nameLabel then f.IdlePanel.nameLabel:SetTextColor(unpack(style.nameColor)) end
+            if f.PhaseB and f.PhaseB.queueText then f.PhaseB.queueText:SetTextColor(unpack(style.balColor)) end
+        end
+    end
+
+    ApplyStyleToFrame(GuildUtils.LedgerFrame)
+    if GuildUtils.PartyRoller and GuildUtils.PartyRoller.frame then
+        ApplyStyleToFrame(GuildUtils.PartyRoller.frame)
+    end
+    if GuildUtils.ContextMenu then
+        ApplyStyleToFrame(GuildUtils.ContextMenu)
+    end
+end
+
+-- ============================================================================
+-- CORE LOGIC
+-- ============================================================================
 function GuildUtils:Print(msg, isAlert)
     if isAlert then print("|cFFFF0000[GuildUtils] " .. tostring(msg) .. "|r")
     else print("|cFF00FF00[GuildUtils] " .. tostring(msg) .. "|r") end
@@ -65,7 +171,12 @@ GuildUtils.frame:RegisterEvent("CHAT_MSG_ADDON")
 GuildUtils.frame:SetScript("OnEvent", function(self, event, ...)
     if event == "ADDON_LOADED" then
         local loadedAddon = ...
-        if loadedAddon == addonName then GuildUtils:Print("Load Successful", false) end
+        if loadedAddon == addonName then 
+            if not GuildUtilsDB then GuildUtilsDB = {} end
+            GuildUtilsDB.Theme = GuildUtilsDB.Theme or 1
+            GuildUtils:ApplyTheme()
+            GuildUtils:Print("Load Successful", false) 
+        end
     elseif event == "PLAYER_LOGIN" or event == "PLAYER_GUILD_UPDATE" then
         local guildName = GetGuildInfo("player")
         if guildName and not GuildUtils.HasInitialized then
@@ -92,10 +203,8 @@ GuildUtils.frame:SetScript("OnEvent", function(self, event, ...)
     elseif event == "CHAT_MSG_ADDON" then
         local prefix, text, channel, sender = ...
         if prefix == "GU_SYNC" then
-            -- NATIVE ECHO KILLER: Uses WoW's built-in unit checker to perfectly identify if the packet came from you
             if UnitIsUnit(sender, "player") and not GuildUtils.SoloMode then return end
             
-            -- Fallback string match in case UnitIsUnit fails on cross-realm edge cases
             local senderName = strtrim((strsplit("-", sender)))
             local myName = strtrim((strsplit("-", UnitName("player"))))
             if senderName == myName and not GuildUtils.SoloMode then return end
@@ -152,7 +261,6 @@ function GuildUtils:HandleSyncMessage(senderName, text)
         GuildUtils.LootCoin:ToggleManagementFreeze(tGuid, tName, true)
     elseif command == "SET_FREEZE" then
         local tGuid, tName, tState = strsplit(":", payload)
-        -- STRIP invisible network characters that were poisoning the payload
         tState = tostring(tState or ""):gsub("%s+", "")
         GuildUtils.LootCoin:ToggleManagementFreeze(tGuid, tName, true, tState)
     elseif command == "MERGE_ACK" then GuildUtils.LootCoin:ReceiveMergeAck(payload)
@@ -278,6 +386,25 @@ function GuildUtils:ConcludeElection()
     end
 end
 
+-- ============================================================================
+-- SLASH COMMANDS
+-- ============================================================================
+SLASH_GUILDUTILSTHEME1 = "/gutheme"
+SlashCmdList["GUILDUTILSTHEME"] = function(msg)
+    local index = tonumber(msg)
+    if index and GuildUtils.Styles[index] then
+        if not GuildUtilsDB then GuildUtilsDB = {} end
+        GuildUtilsDB.Theme = index
+        GuildUtils:ApplyTheme()
+        if GuildUtils.LedgerFrame and GuildUtils.LedgerFrame:IsShown() then GuildUtils:UpdateLedgerDisplay(GuildUtils.LedgerFrame.searchBox:GetText()) end
+        if GuildUtils.PartyRoller and GuildUtils.PartyRoller.frame and GuildUtils.PartyRoller.frame:IsShown() then GuildUtils.PartyRoller:SetUIState(GuildUtils.PartyRoller.State) end
+        GuildUtils:Print("Style applied: " .. GuildUtils.Styles[index].name, false)
+    else
+        GuildUtils:Print("Usage: /gutheme [1, 2, or 3]", true)
+        GuildUtils:Print("1 = Blizzard Classic | 2 = Modern Flat | 3 = Floating Scroll", false)
+    end
+end
+
 SLASH_GUILDUTILSHOST1 = "/guhost"
 SlashCmdList["GUILDUTILSHOST"] = function()
     if GuildUtils.Host then GuildUtils:Print(string.format("Authoritative Host is: %s", GuildUtils.Host), false)
@@ -297,7 +424,6 @@ SlashCmdList["GUILDUTILSSOLO"] = function()
     if GuildUtils.LedgerFrame and GuildUtils.LedgerFrame:IsShown() then GuildUtils:UpdateLedgerDisplay(GuildUtils.LedgerFrame.searchBox:GetText()) end
 end
 
--- Task 1: /gureset Confirmation Modal
 StaticPopupDialogs["GUILDUTILS_CONFIRM_RESET"] = {
     text = "|cFFFF0000WARNING:|r Are you sure you want to FACTORY RESET the LootCoin ledger?\n\nThis will wipe all local data and broadcast a hard reset to all online guild members. This cannot be undone.",
     button1 = "Yes, Reset",
@@ -308,9 +434,7 @@ StaticPopupDialogs["GUILDUTILS_CONFIRM_RESET"] = {
             GuildUtils:SendSync("RESET", "GUILD")
         end
     end,
-    timeout = 0,
-    whileDead = true,
-    hideOnEscape = true,
+    timeout = 0, whileDead = true, hideOnEscape = true,
 }
 
 SLASH_GUILDUTILSRESET1 = "/gureset"
@@ -318,13 +442,13 @@ SlashCmdList["GUILDUTILSRESET"] = function()
     StaticPopup_Show("GUILDUTILS_CONFIRM_RESET")
 end
 
--- Task 2: /guhelp Command
 SLASH_GUILDUTILSHELP1 = "/guhelp"
 SLASH_GUILDUTILSHELP2 = "/gu?"
 SlashCmdList["GUILDUTILSHELP"] = function()
     GuildUtils:Print("Available Commands:", false)
     print("  |cFFFFFF00/gu|r or |cFFFFFF00/ledger|r - Open/Close the Ledger UI")
     print("  |cFFFFFF00/guloot|r - Open the Group & Loot Manager")
+    print("  |cFFFFFF00/gutheme 1/2/3|r - Switch Window Styles")
     print("  |cFFFFFF00/gubid [Item]|r - Start a Loot Council queue for an item")
     print("  |cFFFFFF00/gustartgroup|r - Start a group loot event (freezes balances)")
     print("  |cFFFFFF00/guendgroup|r - End the active group event (merges balances)")
