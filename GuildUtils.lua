@@ -1,5 +1,7 @@
 local addonName, GuildUtils = ...
+_G.GuildUtils = GuildUtils
 
+GuildUtils.Version = "1.1.0"
 GuildUtils.frame = CreateFrame("Frame")
 GuildUtils.framePool = {}
 GuildUtils.Host = nil
@@ -65,7 +67,6 @@ function GuildUtils:ApplyTheme()
     local function ApplyStyleToFrame(f)
         if not f then return end
         
-        -- Fix window layering strata so they sit cleanly above background UI
         f:SetFrameStrata("HIGH")
         f:SetToplevel(true)
         f:EnableMouse(true)
@@ -114,8 +115,17 @@ function GuildUtils:ApplyTheme()
 end
 
 -- ============================================================================
--- CORE LOGIC & CHAT ROUTING
+-- CORE LOGIC, SECURITY, & CHAT ROUTING
 -- ============================================================================
+-- ANTI-CHEAT: Checksum Generator for Log Integrity
+function GuildUtils:GenerateHash(dataString)
+    local hash = 5381
+    for i = 1, #dataString do
+        hash = ((hash * 33) + string.byte(dataString, i)) % 4294967296
+    end
+    return tostring(hash)
+end
+
 function GuildUtils:GetChatColor(alertType)
     if not GuildUtilsDB or not GuildUtilsDB.ActiveProfile then 
         return GuildUtils.Constants and GuildUtils.Constants.ChatAlerts[alertType].defaultColor or "00BFFF" 
@@ -130,7 +140,6 @@ function GuildUtils:GetChatColor(alertType)
 end
 
 function GuildUtils:Print(msg, alertTypeOrWarning)
-    -- Route the alert type (supports legacy booleans or explicit strings)
     local alertType = "Normal"
     if type(alertTypeOrWarning) == "string" then
         alertType = alertTypeOrWarning
@@ -139,16 +148,16 @@ function GuildUtils:Print(msg, alertTypeOrWarning)
     end
     
     local color = self:GetChatColor(alertType)
-    
-    -- Wrap the ENTIRE message in the selected hex color
     local formattedMessage = string.format("|cFF%s[GuildUtils] %s|r", color, tostring(msg))
     print(formattedMessage)
 end
+
 function GuildUtils:TriggerDesktopAlert()
     if GuildUtilsDB and GuildUtilsDB.DesktopAlerts then
         FlashClientIcon()
     end
 end
+
 function GuildUtils:ProcessOutboundQueue()
     if #GuildUtils.OutboundQueue == 0 then return end
     local payload = table.remove(GuildUtils.OutboundQueue, 1)
@@ -187,6 +196,17 @@ function GuildUtils:SendSync(msg, specificChannel, target)
     end
 end
 
+-- NETWORK OPTIMIZATION: Chunked Sync for large audit logs
+function GuildUtils:SendChunkedSync(prefix, payload)
+    if self.SoloMode then return end
+    local maxLen = 200
+    local chunks = math.ceil(#payload / maxLen)
+    for i = 1, chunks do
+        local chunk = string.sub(payload, (i - 1) * maxLen + 1, i * maxLen)
+        self:SendSync(prefix .. "_CHUNK:" .. i .. "/" .. chunks .. ":" .. chunk, "GUILD")
+    end
+end
+
 GuildUtils.frame:RegisterEvent("ADDON_LOADED")
 GuildUtils.frame:RegisterEvent("PLAYER_LOGIN")
 GuildUtils.frame:RegisterEvent("PLAYER_GUILD_UPDATE")
@@ -202,7 +222,6 @@ GuildUtils.frame:SetScript("OnEvent", function(self, event, ...)
         if loadedAddon == addonName then 
             if not GuildUtilsDB then GuildUtilsDB = {} end
             
-            -- Initialize Profile Architecture
             if not GuildUtilsDB.Profiles then
                 GuildUtilsDB.Profiles = {
                     Guild = { Colors = {} },
@@ -216,6 +235,9 @@ GuildUtils.frame:SetScript("OnEvent", function(self, event, ...)
             GuildUtils:Print("Load Successful", false) 
         end
     elseif event == "PLAYER_LOGIN" or event == "PLAYER_GUILD_UPDATE" then
+        if event == "PLAYER_LOGIN" then
+            GuildUtils:SendSync("VERSION:" .. GuildUtils.Version, "GUILD")
+        end
         local guildName = GetGuildInfo("player")
         if guildName and not GuildUtils.HasInitialized then
             GuildUtils.HasInitialized = true
@@ -243,9 +265,7 @@ GuildUtils.frame:SetScript("OnEvent", function(self, event, ...)
         if prefix == "GU_SYNC" then
             if UnitIsUnit(sender, "player") and not GuildUtils.SoloMode then return end
             
-            -- FIX: Capture UnitName in a variable to drop the second return value (realm)
             local playerName = UnitName("player")
-            
             local senderName = strtrim((strsplit("-", sender)))
             local myName = strtrim((strsplit("-", playerName)))
             
@@ -262,7 +282,23 @@ function GuildUtils:HandleSyncMessage(senderName, text)
     command = command or text
     payload = payload or ""
     
-    if command == "HEARTBEAT" then GuildUtils:AcknowledgeHeartbeat(senderName, tonumber(payload))
+    -- VERSION CONTROL
+    if command == "VERSION" then
+        if payload > self.Version then
+            self:Print("Your GuildUtils addon is out of date (v" .. self.Version .. "). Please update to v" .. payload, true)
+        end
+    -- ANTI-CHEAT VERIFICATION
+    elseif command == "LOG_HASH" then
+        local localLogState = "LOG_STATE_STRING" -- Placeholder for your serialized log state
+        local localHash = self:GenerateHash(localLogState)
+        if payload ~= localHash then
+            self:Debug("Hash mismatch from " .. senderName .. ". Flagging as tampered.")
+            if not GuildUtilsDB.Ledger.frozenAccounts then GuildUtilsDB.Ledger.frozenAccounts = {} end
+            GuildUtilsDB.Ledger.frozenAccounts[senderName] = "T"
+            if GuildUtils.LedgerFrame and GuildUtils.LedgerFrame:IsShown() then self:UpdateLedgerDisplay() end
+        end
+    -- CORE EVENT ROUTING
+    elseif command == "HEARTBEAT" then GuildUtils:AcknowledgeHeartbeat(senderName, tonumber(payload))
     elseif command == "ELECTION" then
         local rankStr, verStr, guidStr, inGroupStr = strsplit(":", payload)
         GuildUtils:ProcessElection(senderName, tonumber(rankStr), tonumber(verStr), guidStr, inGroupStr == "true")

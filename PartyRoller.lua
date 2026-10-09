@@ -14,6 +14,8 @@ GuildUtils.PartyRoller.HasResponded = false
 GuildUtils.PartyRoller.State = "IDLE"
 GuildUtils.PartyRoller.ResultsAcks = {}
 GuildUtils.PartyRoller.ResultsClosedSent = false
+GuildUtils.PartyRoller.QueueLocked = false
+GuildUtils.PartyRoller.AuthorizedPlayers = {}
 
 local GU_PendingLoot = {}
 local GU_ReservedStatus = {}
@@ -145,7 +147,6 @@ end
 function GuildUtils.PartyRoller:InitializeUI()
     if self.frame then return self.frame end
 
-    -- Ultra-slim width of 200 pixels
     local f = CreateFrame("Frame", "GuildUtilsGroupManagerFrame", UIParent, "BackdropTemplate")
     f:Hide()
     f:SetSize(200, 320)
@@ -219,7 +220,6 @@ function GuildUtils.PartyRoller:InitializeUI()
     f.HubPanel = CreateFrame("Frame", nil, f)
     f.HubPanel:SetAllPoints(f)
     
-    -- Compact button width of 160 pixels
     local function CreateHubButton(name, text, yOffset, onClick)
         local btn = CreateFrame("Button", name, f.HubPanel, "UIPanelButtonTemplate")
         btn:SetSize(160, 26)
@@ -229,21 +229,11 @@ function GuildUtils.PartyRoller:InitializeUI()
         return btn
     end
 
-    f.HubPanel.btnRollCall = CreateHubButton(nil, "Roll Call", -45, function()
-        DoReadyCheck()
-    end)
-    f.HubPanel.btnAnnounce = CreateHubButton(nil, "Announce", -80, function()
-        StaticPopup_Show("GUILDUTILS_ANNOUNCE")
-    end)
-    f.HubPanel.btnPullTimer = CreateHubButton(nil, "Pull Timer", -115, function()
-        StaticPopup_Show("GUILDUTILS_PULL_TIMER")
-    end)
-    f.HubPanel.btnBreak = CreateHubButton(nil, "Break", -150, function()
-        StaticPopup_Show("GUILDUTILS_BREAK_TIMER")
-    end)
-    f.HubPanel.btnLoot = CreateHubButton(nil, "Loot", -185, function()
-        GuildUtils.PartyRoller:ShowPhaseA()
-    end)
+    f.HubPanel.btnRollCall = CreateHubButton(nil, "Roll Call", -45, function() DoReadyCheck() end)
+    f.HubPanel.btnAnnounce = CreateHubButton(nil, "Announce", -80, function() StaticPopup_Show("GUILDUTILS_ANNOUNCE") end)
+    f.HubPanel.btnPullTimer = CreateHubButton(nil, "Pull Timer", -115, function() StaticPopup_Show("GUILDUTILS_PULL_TIMER") end)
+    f.HubPanel.btnBreak = CreateHubButton(nil, "Break", -150, function() StaticPopup_Show("GUILDUTILS_BREAK_TIMER") end)
+    f.HubPanel.btnLoot = CreateHubButton(nil, "Loot", -185, function() GuildUtils.PartyRoller:ShowPhaseA() end)
 
     f.HubPanel.btnEndGroup = CreateFrame("Button", nil, f.HubPanel, "UIPanelButtonTemplate")
     f.HubPanel.btnEndGroup:SetSize(160, 26)
@@ -347,7 +337,6 @@ function GuildUtils.PartyRoller:InitializeUI()
     f.PhaseB.reservedWarning:SetTextColor(1, 0, 0)
     f.PhaseB.reservedWarning:SetText("RESERVED ITEM")
 
-    -- Slimmer bidding buttons
     f.PhaseB.needBtn = CreateFrame("Button", nil, f.PhaseB, "UIPanelButtonTemplate")
     f.PhaseB.needBtn:SetSize(55, 22)
     f.PhaseB.needBtn:SetPoint("BOTTOMLEFT", 10, 15)
@@ -401,9 +390,7 @@ function GuildUtils.PartyRoller:InitializeUI()
     end)
 
     self.frame = f
-    
     GuildUtils:ApplyTheme()
-    
     return f
 end
 
@@ -724,6 +711,12 @@ function GuildUtils.PartyRoller:TriggerWagerModal(bidType)
 end
 
 function GuildUtils.PartyRoller:ProcessBidIntent(senderName, payload)
+    -- ROLL QUEUE SECURITY: Intercept unauthorized inputs
+    if self.QueueLocked and not self.AuthorizedPlayers[senderName] then
+        GuildUtils:Debug("Security Alert: Rejected bid from unauthorized/late joiner: " .. tostring(senderName))
+        return
+    end
+
     local bidType, amtStr, guid = strsplit(":", payload)
     local amount = tonumber(amtStr) or 0
 
@@ -766,20 +759,24 @@ function GuildUtils.PartyRoller:OnBidReceived(player, bidType, amount, baseRoll,
     end
 end
 
-function GuildUtils.PartyRoller:OnBidRejected(reason)
-    self.HasResponded = false
-    GuildUtils:Print("Roll Rejected: " .. reason, true)
-    local f = self.frame.PhaseB
-    for i = 1, 5 do f.leaderboardRows[i]:Hide() end
-    f.passBtn:Show() f.greedBtn:Show()
-    if not self.CurrentItemData.reserved then f.needBtn:Show() else f.reservedWarning:Show() end
-end
-
 function GuildUtils.PartyRoller:HostStartQueue(queueData, duration)
     self.Queue = queueData
     self.QueueIndex = 1
     self.Duration = duration or 5
     self.ResultsDuration = duration or 5
+
+    -- ROLL QUEUE SECURITY: Snapshot the active roster
+    self.QueueLocked = true
+    self.AuthorizedPlayers = {}
+    if IsInGroup() then
+        for i = 1, GetNumGroupMembers() do
+            local name = GetRaidRosterInfo(i)
+            if name then self.AuthorizedPlayers[name] = true end
+        end
+    else
+        self.AuthorizedPlayers[UnitName("player")] = true
+    end
+
     GuildUtils:Print(string.format("Starting roll queue with %d items (%ds timer).", #queueData, self.Duration), false)
     GuildUtils:TriggerDesktopAlert()
     self:BroadcastQueueState()
@@ -804,7 +801,8 @@ function GuildUtils.PartyRoller:HostNextItem()
         if #self.Queue > 1 then 
             self:ShowPhaseC() 
         else 
-            -- ADDED CLEANUP LOGIC HERE
+            self.QueueLocked = false
+            self.AuthorizedPlayers = {}
             self.Queue = {}
             self.QueueIndex = 0
             self.QueueResults = {}
@@ -845,7 +843,8 @@ function GuildUtils.PartyRoller:ClientFinishQueue()
     if #self.Queue > 1 then 
         self:ShowPhaseC() 
     else 
-        -- ADDED CLEANUP LOGIC HERE
+        self.QueueLocked = false
+        self.AuthorizedPlayers = {}
         self.Queue = {}
         self.QueueIndex = 0
         self.QueueResults = {}
