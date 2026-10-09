@@ -114,13 +114,41 @@ function GuildUtils:ApplyTheme()
 end
 
 -- ============================================================================
--- CORE LOGIC
+-- CORE LOGIC & CHAT ROUTING
 -- ============================================================================
-function GuildUtils:Print(msg, isAlert)
-    if isAlert then print("|cFFFF0000[GuildUtils] " .. tostring(msg) .. "|r")
-    else print("|cFF00FF00[GuildUtils] " .. tostring(msg) .. "|r") end
+function GuildUtils:GetChatColor(alertType)
+    if not GuildUtilsDB or not GuildUtilsDB.ActiveProfile then 
+        return GuildUtils.Constants and GuildUtils.Constants.ChatAlerts[alertType].defaultColor or "00BFFF" 
+    end
+    
+    local activeProfile = GuildUtilsDB.ActiveProfile
+    if activeProfile == "Default" or not GuildUtilsDB.Profiles[activeProfile].Colors[alertType] then
+        return GuildUtils.Constants and GuildUtils.Constants.ChatAlerts[alertType].defaultColor or "00BFFF"
+    end
+    
+    return GuildUtilsDB.Profiles[activeProfile].Colors[alertType]
 end
 
+function GuildUtils:Print(msg, alertTypeOrWarning)
+    -- Route the alert type (supports legacy booleans or explicit strings)
+    local alertType = "Normal"
+    if type(alertTypeOrWarning) == "string" then
+        alertType = alertTypeOrWarning
+    elseif alertTypeOrWarning == true then
+        alertType = "Election"
+    end
+    
+    local color = self:GetChatColor(alertType)
+    
+    -- Wrap the ENTIRE message in the selected hex color
+    local formattedMessage = string.format("|cFF%s[GuildUtils] %s|r", color, tostring(msg))
+    print(formattedMessage)
+end
+function GuildUtils:TriggerDesktopAlert()
+    if GuildUtilsDB and GuildUtilsDB.DesktopAlerts then
+        FlashClientIcon()
+    end
+end
 function GuildUtils:ProcessOutboundQueue()
     if #GuildUtils.OutboundQueue == 0 then return end
     local payload = table.remove(GuildUtils.OutboundQueue, 1)
@@ -173,7 +201,17 @@ GuildUtils.frame:SetScript("OnEvent", function(self, event, ...)
         local loadedAddon = ...
         if loadedAddon == addonName then 
             if not GuildUtilsDB then GuildUtilsDB = {} end
+            
+            -- Initialize Profile Architecture
+            if not GuildUtilsDB.Profiles then
+                GuildUtilsDB.Profiles = {
+                    Guild = { Colors = {} },
+                    Personal = { Colors = {} }
+                }
+            end
+            GuildUtilsDB.ActiveProfile = GuildUtilsDB.ActiveProfile or "Default"
             GuildUtilsDB.Theme = GuildUtilsDB.Theme or 1
+            
             GuildUtils:ApplyTheme()
             GuildUtils:Print("Load Successful", false) 
         end
@@ -205,8 +243,12 @@ GuildUtils.frame:SetScript("OnEvent", function(self, event, ...)
         if prefix == "GU_SYNC" then
             if UnitIsUnit(sender, "player") and not GuildUtils.SoloMode then return end
             
+            -- FIX: Capture UnitName in a variable to drop the second return value (realm)
+            local playerName = UnitName("player")
+            
             local senderName = strtrim((strsplit("-", sender)))
-            local myName = strtrim((strsplit("-", UnitName("player"))))
+            local myName = strtrim((strsplit("-", playerName)))
+            
             if senderName == myName and not GuildUtils.SoloMode then return end
             
             GuildUtils:HandleSyncMessage(senderName, text)
@@ -215,6 +257,7 @@ GuildUtils.frame:SetScript("OnEvent", function(self, event, ...)
 end)
 
 function GuildUtils:HandleSyncMessage(senderName, text)
+    GuildUtils:Debug("Sync from " .. tostring(senderName) .. ": " .. text)
     local command, payload = string.match(text, "^([^:]+):(.*)$")
     command = command or text
     payload = payload or ""
@@ -385,6 +428,11 @@ function GuildUtils:ConcludeElection()
         end)
     end
 end
+function GuildUtils:Debug(msg)
+    if GuildUtilsDB and GuildUtilsDB.DebugMode then
+        print("|cFF808080[GU-Debug]|r " .. tostring(msg))
+    end
+end
 
 -- ============================================================================
 -- SLASH COMMANDS
@@ -449,6 +497,7 @@ SlashCmdList["GUILDUTILSHELP"] = function()
     print("  |cFFFFFF00/gu|r or |cFFFFFF00/ledger|r - Open/Close the Ledger UI")
     print("  |cFFFFFF00/guloot|r - Open the Group & Loot Manager")
     print("  |cFFFFFF00/gutheme 1/2/3|r - Switch Window Styles")
+    print("  |cFFFFFF00/guconfig|r - Open the Settings Panel")
     print("  |cFFFFFF00/gubid [Item]|r - Start a Loot Council queue for an item")
     print("  |cFFFFFF00/gustartgroup|r - Start a group loot event (freezes balances)")
     print("  |cFFFFFF00/guendgroup|r - End the active group event (merges balances)")

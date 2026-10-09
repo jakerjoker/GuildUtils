@@ -7,6 +7,7 @@ function GuildUtils:ToggleLedgerUI()
     if not self.LedgerFrame then
         -- Slimmed width from 420 down to 260
         self.LedgerFrame = CreateFrame("Frame", "GuildUtilsLedgerFrame", UIParent, "BackdropTemplate")
+        self.LedgerFrame:Hide()
         local f = self.LedgerFrame
         f:SetSize(260, 420)
         f:SetPoint("CENTER")
@@ -127,7 +128,13 @@ function GuildUtils:UpdateLedgerDisplay(searchQuery)
             table.insert(sortedList, {guid = guid, name = name, balance = bal})
         end
         
+        local myName = UnitName("player")
         table.sort(sortedList, function(a, b)
+            -- Pin local player to the top
+            if a.name == myName then return true end
+            if b.name == myName then return false end
+            
+            -- Sort the rest by balance, then alphabetically
             if a.balance ~= b.balance then return a.balance > b.balance end
             return a.name < b.name
         end)
@@ -142,12 +149,12 @@ function GuildUtils:UpdateLedgerDisplay(searchQuery)
                     row = CreateFrame("Frame", nil, scrollChild)
                     row:SetSize(210, 24)
                     
-                    row.nameText = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+                    row.nameText = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
                     row.nameText:SetPoint("LEFT", 2, 0)
                     row.nameText:SetWidth(130)
                     row.nameText:SetJustifyH("LEFT")
                     
-                    row.balText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+                    row.balText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
                     row.balText:SetPoint("RIGHT", -5, 0) 
                     
                     GuildUtils.LedgerRows[rowIndex] = row
@@ -158,12 +165,28 @@ function GuildUtils:UpdateLedgerDisplay(searchQuery)
                 row.nameText:SetText(data.name)
                 row.nameText:SetTextColor(unpack(style.nameColor))
                 
+                -- Check for tags
                 local isFrozen = GuildUtilsDB.Ledger.frozenAccounts and GuildUtilsDB.Ledger.frozenAccounts[data.guid]
                 local balDisplay = tostring(data.balance)
+                local tagString = ""
+                local cTags = GuildUtils.Constants and GuildUtils.Constants.StatusTags
+                
+                -- Apply Status Tags [GL], [G], [F], [T]
                 if isFrozen then
-                    balDisplay = balDisplay .. " |cFFFF0000[" .. tostring(isFrozen) .. "]|r"
+                    local fColor = "FFFF00" -- Fallback color
+                    if isFrozen == "F" then fColor = cTags and cTags.Freeze.defaultColor or "00BFFF"
+                    elseif isFrozen == "GL" then fColor = cTags and cTags.GroupLeader.defaultColor or "FF8C00"
+                    elseif isFrozen == "G" then fColor = cTags and cTags.InGroup.defaultColor or "FF8C00"
+                    elseif isFrozen == "T" then fColor = cTags and cTags.Tampered.defaultColor or "FF4500"
+                    end
+                    tagString = tagString .. "|cFF" .. fColor .. "[" .. tostring(isFrozen) .. "]|r "
                 end
                 
+                -- Prepend the tags to the player's name
+                row.nameText:SetText(tagString .. data.name)
+                row.nameText:SetTextColor(unpack(style.nameColor))
+                
+                -- Set the balance as a standalone number
                 row.balText:SetText(balDisplay)
                 row.balText:SetTextColor(unpack(style.balColor))
                 

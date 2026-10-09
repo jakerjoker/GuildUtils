@@ -147,6 +147,7 @@ function GuildUtils.PartyRoller:InitializeUI()
 
     -- Ultra-slim width of 200 pixels
     local f = CreateFrame("Frame", "GuildUtilsGroupManagerFrame", UIParent, "BackdropTemplate")
+    f:Hide()
     f:SetSize(200, 320)
     f:SetPoint("CENTER", 0, 100)
     f:SetMovable(true)
@@ -283,6 +284,10 @@ function GuildUtils.PartyRoller:InitializeUI()
     f.PhaseA.confirmBtn:SetSize(110, 24)
     f.PhaseA.confirmBtn:SetText("Start Roll")
     f.PhaseA.confirmBtn:SetScript("OnClick", function()
+        if #GU_PendingLoot == 0 then
+            GuildUtils:Print("Cannot start roll: No items in the queue.", true)
+            return
+        end
         if GU_LootCouncilTimer then GU_LootCouncilTimer:Cancel() end
         local queueData = {}
         for i, item in ipairs(GU_PendingLoot) do
@@ -452,6 +457,7 @@ function GuildUtils.PartyRoller:ShowPhaseA()
             GuildUtils:SendSync("QUEUE_ABORTED:TIMEOUT:" .. table.concat(GU_PendingLoot, ","))
             GuildUtils:Print("Loot Council timed out. Queue aborted.", true)
             GU_PendingLoot = {}
+            GU_ReservedStatus = {}
         end
     end)
 end
@@ -512,9 +518,11 @@ function GuildUtils.PartyRoller:StartBidding(itemData, duration)
     
     if itemData.reserved then
         f.needBtn:Hide()
+        f.greedBtn:SetText("Gambit")
         f.reservedWarning:Show()
     else
         f.needBtn:Show()
+        f.greedBtn:SetText("Greed")
         f.reservedWarning:Hide()
     end
     
@@ -773,6 +781,7 @@ function GuildUtils.PartyRoller:HostStartQueue(queueData, duration)
     self.Duration = duration or 5
     self.ResultsDuration = duration or 5
     GuildUtils:Print(string.format("Starting roll queue with %d items (%ds timer).", #queueData, self.Duration), false)
+    GuildUtils:TriggerDesktopAlert()
     self:BroadcastQueueState()
 end
 
@@ -792,7 +801,17 @@ function GuildUtils.PartyRoller:HostNextItem()
     self.QueueIndex = self.QueueIndex + 1
     if self.QueueIndex > #self.Queue then
         GuildUtils:Print("Roll queue finished.", false)
-        if #self.Queue > 1 then self:ShowPhaseC() else if self.frame then self.frame:Hide() end end
+        if #self.Queue > 1 then 
+            self:ShowPhaseC() 
+        else 
+            -- ADDED CLEANUP LOGIC HERE
+            self.Queue = {}
+            self.QueueIndex = 0
+            self.QueueResults = {}
+            GU_PendingLoot = {}
+            GU_ReservedStatus = {}
+            if self.frame then self.frame:Hide() end 
+        end
         if not GuildUtils.SoloMode then GuildUtils:SendSync("QUEUE_FINISHED") end
         return
     end
@@ -823,7 +842,17 @@ end
 
 function GuildUtils.PartyRoller:ClientFinishQueue()
     if self.CountdownTimer then self.CountdownTimer:Cancel() end
-    if #self.Queue > 1 then self:ShowPhaseC() else if self.frame then self.frame:Hide() end end
+    if #self.Queue > 1 then 
+        self:ShowPhaseC() 
+    else 
+        -- ADDED CLEANUP LOGIC HERE
+        self.Queue = {}
+        self.QueueIndex = 0
+        self.QueueResults = {}
+        GU_PendingLoot = {}
+        GU_ReservedStatus = {}
+        if self.frame then self.frame:Hide() end 
+    end
 end
 
 function GuildUtils.PartyRoller:ResetHostTimer()

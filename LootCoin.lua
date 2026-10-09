@@ -58,7 +58,8 @@ function GuildUtils.LootCoin:ProcessTransaction(guid, playerName, amount, reason
     GuildUtilsDB.Ledger.version = (GuildUtilsDB.Ledger.version or 1) + 1
     
     local timestamp = date("%Y-%m-%d %H:%M:%S")
-    local entry = string.format("[%s] %s (%s): %d LC (%s) - New Balance: %d", timestamp, playerName or "Unknown", guid, amount, reason or "No reason", newBalance)
+    -- Format changed here: removed "(%s)" and the 'guid' variable
+    local entry = string.format("[%s] %s: %d LC (%s) - New Balance: %d", timestamp, playerName or "Unknown", amount, reason or "No reason", newBalance)
     table.insert(GuildUtilsDB.Ledger.auditLog, entry)
     
     -- Overflow Buffers

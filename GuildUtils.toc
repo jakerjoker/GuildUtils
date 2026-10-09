@@ -5,7 +5,9 @@
 ## Version: 1.0.0
 ## SavedVariables: GuildUtilsDB
 
+Constants.lua
 GuildUtils.lua
 LootCoin.lua
 LedgerUI.lua
 PartyRoller.lua
+SettingsUI.lua
