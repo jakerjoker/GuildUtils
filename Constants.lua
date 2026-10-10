@@ -1,6 +1,10 @@
 local addonName, GuildUtils = ...
 
 GuildUtils.Constants = {
+    -- P2P Network Timings
+    HEARTBEAT_INTERVAL = 5,
+    HEARTBEAT_TIMEOUT = 12,
+
     -- Chat Notifications (Color Customizable)
     ChatAlerts = {
         Normal = { text = "[GuildUtils] %s", defaultColor = "00BFFF" },

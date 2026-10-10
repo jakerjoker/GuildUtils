@@ -97,7 +97,15 @@ SlashCmdList["GUILDUTILSLOOT"] = function()
     if f:IsShown() then
         f:Hide()
     else
-        if GuildUtilsDB and GuildUtilsDB.Ledger and GuildUtilsDB.Ledger.ActiveSession then
+        local s = GuildUtils.PartyRoller.State
+        -- Smart Re-Open: Return to the active queue and re-render dynamic lists
+        if s == "BIDDING" or s == "RESULTS" then
+            GuildUtils.PartyRoller:SetUIState(s)
+        elseif s == "PHASE_A" then
+            GuildUtils.PartyRoller:ShowPhaseA()
+        elseif s == "PHASE_C" then
+            GuildUtils.PartyRoller:ShowPhaseC()
+        elseif GuildUtilsDB and GuildUtilsDB.Ledger and GuildUtilsDB.Ledger.ActiveSession then
             GuildUtils.PartyRoller:SetUIState("HUB_PANEL")
         else
             GuildUtils.PartyRoller:SetUIState("IDLE_PANEL")
@@ -112,10 +120,7 @@ SlashCmdList["GUILDUTILS_BID"] = function(msg)
             GuildUtils:Print("You must start a group event (/gustartgroup) before rolling items.", true)
             return
         end
-        local isLeader = UnitIsGroupLeader("player")
-        local lootMethod, mlPartyID = nil, nil
-        if GetLootMethod then lootMethod, mlPartyID = GetLootMethod() end
-        if not isLeader and not (lootMethod == "master" and mlPartyID == 0) then 
+        if not GuildUtils:IsMasterLootActive() then 
             GuildUtils:Print("Only the group leader or master looter can initiate rolls.", true) 
             return 
         end
@@ -175,9 +180,9 @@ function GuildUtils.PartyRoller:InitializeUI()
 
     f:SetScript("OnHide", function()
         GameTooltip:Hide()
-        if self.CountdownTimer then self.CountdownTimer:Cancel() self.CountdownTimer = nil end
+        -- CRITICAL FIX: Never cancel timers or wipe the state here. 
+        -- The window is allowed to close while the queue runs in the background.
         if self.State == "RESULTS" then self:TriggerResultsClosed() end
-        self.State = "IDLE"
     end)
 
     f.IdlePanel = CreateFrame("Frame", nil, f)
@@ -201,12 +206,9 @@ function GuildUtils.PartyRoller:InitializeUI()
     f.IdlePanel.startBtn:SetPoint("TOP", f.IdlePanel.nameInput, "BOTTOM", 0, -20)
     f.IdlePanel.startBtn:SetText("Start Group")
     f.IdlePanel.startBtn:SetScript("OnClick", function()
-        if not GuildUtils.SoloMode then
-            if not IsInGroup() then GuildUtils:Print("You are not in a group.", true) return end
-            local lootMethod, mlPartyID = nil, nil
-            if GetLootMethod then lootMethod, mlPartyID = GetLootMethod() end
-            if lootMethod ~= "master" then GuildUtils:Print("You are not in a masterloot group.", true) return end
-            if not UnitIsGroupLeader("player") and mlPartyID ~= 0 then GuildUtils:Print("You are not the leader/master looter.", true) return end
+        if not GuildUtils:IsMasterLootActive() then
+            GuildUtils:Print("You are not the leader/master looter of a masterloot group.", true) 
+            return 
         end
         
         local groupName = f.IdlePanel.nameInput:GetText()
@@ -244,15 +246,9 @@ function GuildUtils.PartyRoller:InitializeUI()
             GuildUtils:Print("No active group event found.", true)
             return
         end
-        if not GuildUtils.SoloMode then
-            local isLeader = UnitIsGroupLeader("player")
-            local lootMethod, mlPartyID = nil, nil
-            if GetLootMethod then lootMethod, mlPartyID = GetLootMethod() end
-            local isML = (lootMethod == "master" and mlPartyID == 0)
-            if not isLeader and not isML then 
-                GuildUtils:Print("You are not the group leader or master looter.", true) 
-                return 
-            end
+        if not GuildUtils:IsMasterLootActive() then 
+            GuildUtils:Print("You are not the group leader or master looter.", true) 
+            return 
         end
         GuildUtils.LootCoin:EndGroupEvent()
         GuildUtils.PartyRoller:SetUIState("IDLE_PANEL")
@@ -359,15 +355,11 @@ function GuildUtils.PartyRoller:InitializeUI()
     f.PhaseB.closeBtn:SetSize(110, 24)
     f.PhaseB.closeBtn:SetPoint("BOTTOM", 0, 15)
     f.PhaseB.closeBtn:SetScript("OnClick", function() 
-        local isLeader = UnitIsGroupLeader("player") or GuildUtils.SoloMode
-        local lootMethod, mlPartyID = nil, nil
-        if GetLootMethod then lootMethod, mlPartyID = GetLootMethod() end
+        local hasPrivilege = GuildUtils:IsMasterLootActive()
         local wasResults = (GuildUtils.PartyRoller.State == "RESULTS")
         
         GuildUtils.PartyRoller:DismissResults() 
-        if (isLeader or (lootMethod == "master" and mlPartyID == 0)) and wasResults then 
-            GuildUtils.PartyRoller:HostNextItem() 
-        end
+        if hasPrivilege and wasResults then GuildUtils.PartyRoller:HostNextItem() end
     end)
 
     f.PhaseC = CreateFrame("Frame", nil, f)
@@ -386,6 +378,7 @@ function GuildUtils.PartyRoller:InitializeUI()
     f.PhaseC.closeBtn:SetScript("OnClick", function() 
         GU_PendingLoot = {}
         GU_ReservedStatus = {}
+        GuildUtils.PartyRoller.State = "HUB_PANEL" -- Reset State
         f:Hide() 
     end)
 
@@ -532,11 +525,11 @@ function GuildUtils.PartyRoller:StartBidding(itemData, duration)
         if remaining > 0 then f.timerText:SetText(string.format("%ds", remaining))
         else
             if self.CountdownTimer then self.CountdownTimer:Cancel() self.CountdownTimer = nil end
-            if self.frame:IsShown() and self.State == "BIDDING" then
+            if self.State == "BIDDING" then
                 if not self.HasResponded then
                     local delay = GuildUtils.SoloMode and 0 or (math.random() * 0.5)
                     C_Timer.After(delay, function()
-                        if GuildUtils.SoloMode or UnitIsGroupLeader("player") then 
+                        if GuildUtils:IsMasterLootActive() then 
                             GuildUtils.PartyRoller:ProcessBidIntent(UnitName("player"), string.format("Pass:0:%s", myGuid))
                         else 
                             GuildUtils:SendSync(string.format("BID_INTENT:Pass:0:%s", myGuid)) 
@@ -571,11 +564,7 @@ function GuildUtils.PartyRoller:ShowResults()
         amount = winnerBid and winnerBid.amount or 0
     }
     
-    local isGroupLeader = UnitIsGroupLeader("player") or GuildUtils.SoloMode
-    local lootMethod, mlPartyID = nil, nil
-    if GetLootMethod then lootMethod, mlPartyID = GetLootMethod() end
-    local isML = (lootMethod == "master" and mlPartyID == 0)
-    local hasPrivilege = isGroupLeader or isML
+    local hasPrivilege = GuildUtils:IsMasterLootActive()
     
     local myGuid = UnitGUID("player")
     if winnerBid and winnerBid.guid == myGuid then
@@ -589,7 +578,7 @@ function GuildUtils.PartyRoller:ShowResults()
         end
     end
     
-    if isGroupLeader and GuildUtilsDB.Ledger.ActiveSession then
+    if UnitIsGroupLeader("player") and GuildUtilsDB.Ledger.ActiveSession then
         if winnerBid then GuildUtils.LootCoin:UpdateTempLedger(winnerBid.guid, -winnerBid.amount) end
         if self.CurrentItemData.reserved then
             for _, bid in ipairs(self.ActiveBids) do
@@ -629,7 +618,7 @@ function GuildUtils.PartyRoller:ShowResults()
                 if remaining > 0 then f.timerText:SetText(string.format("%ds", remaining))
                 else
                     if self.CountdownTimer then self.CountdownTimer:Cancel() self.CountdownTimer = nil end
-                    if self.frame:IsShown() then self:DismissResults() end
+                    self:DismissResults() -- Removed the visibility check
                 end
             end)
         end
@@ -696,9 +685,13 @@ function GuildUtils.PartyRoller:SubmitRoll(bidType, amount)
     f.needBtn:Hide() f.greedBtn:Hide() f.passBtn:Hide() f.reservedWarning:Hide()
     for i = 1, 5 do f.leaderboardRows[i]:Show() end
     
+    -- Visual feedback so the screen doesn't look broken during the 0.5s network delay
+    f.infoText:SetText("|cFFFFFF00Bid Submitted. Waiting on others...|r")
+    self:UpdateSpectatorBoard() 
+    
     local myGuid = UnitGUID("player")
     C_Timer.After(GuildUtils.SoloMode and 0 or (math.random() * 0.5), function()
-        if GuildUtils.SoloMode or UnitIsGroupLeader("player") then 
+        if GuildUtils:IsMasterLootActive() then 
             GuildUtils.PartyRoller:ProcessBidIntent(UnitName("player"), string.format("%s:%d:%s", bidType, amount, myGuid))
         else GuildUtils:SendSync(string.format("BID_INTENT:%s:%d:%s", bidType, amount, myGuid)) end
     end)
@@ -711,7 +704,6 @@ function GuildUtils.PartyRoller:TriggerWagerModal(bidType)
 end
 
 function GuildUtils.PartyRoller:ProcessBidIntent(senderName, payload)
-    -- ROLL QUEUE SECURITY: Intercept unauthorized inputs
     if self.QueueLocked and not self.AuthorizedPlayers[senderName] then
         GuildUtils:Debug("Security Alert: Rejected bid from unauthorized/late joiner: " .. tostring(senderName))
         return
@@ -765,7 +757,6 @@ function GuildUtils.PartyRoller:HostStartQueue(queueData, duration)
     self.Duration = duration or 5
     self.ResultsDuration = duration or 5
 
-    -- ROLL QUEUE SECURITY: Snapshot the active roster
     self.QueueLocked = true
     self.AuthorizedPlayers = {}
     if IsInGroup() then
@@ -808,6 +799,7 @@ function GuildUtils.PartyRoller:HostNextItem()
             self.QueueResults = {}
             GU_PendingLoot = {}
             GU_ReservedStatus = {}
+            self.State = "HUB_PANEL" -- Reset state
             if self.frame then self.frame:Hide() end 
         end
         if not GuildUtils.SoloMode then GuildUtils:SendSync("QUEUE_FINISHED") end
@@ -850,16 +842,14 @@ function GuildUtils.PartyRoller:ClientFinishQueue()
         self.QueueResults = {}
         GU_PendingLoot = {}
         GU_ReservedStatus = {}
+        self.State = "HUB_PANEL" -- Reset state
         if self.frame then self.frame:Hide() end 
     end
 end
 
 function GuildUtils.PartyRoller:ResetHostTimer()
     if self.HostTimer then self.HostTimer:Cancel() end
-    local isLeader = UnitIsGroupLeader("player") or GuildUtils.SoloMode
-    local lootMethod, mlPartyID = nil, nil
-    if GetLootMethod then lootMethod, mlPartyID = GetLootMethod() end
-    if isLeader or (lootMethod == "master" and mlPartyID == 0) then return end 
+    if GuildUtils:IsMasterLootActive() then return end 
 
     self.HostTimer = C_Timer.NewTimer(self.Duration + self.ResultsDuration + 20, function()
         GuildUtils:Print("Safety timeout reached. Forcing advance to next item.", true)
@@ -871,26 +861,32 @@ function GuildUtils.PartyRoller:DismissResults()
     if self.State ~= "RESULTS" then return end
     if self.CountdownTimer then self.CountdownTimer:Cancel() self.CountdownTimer = nil end
     self:TriggerResultsClosed()
+    if GuildUtilsDB and GuildUtilsDB.Ledger and GuildUtilsDB.Ledger.ActiveSession then
+        self.State = "HUB_PANEL"
+    else
+        self.State = "IDLE_PANEL"
+    end
+    
     if self.frame then self.frame:Hide() end
 end
 
 function GuildUtils.PartyRoller:TriggerResultsClosed()
     if self.ResultsClosedSent then return end
     self.ResultsClosedSent = true
+    
+    local itemIndex = (self.CurrentItemData and self.CurrentItemData.Index) or self.QueueIndex or 1
+    local msg = "RESULTS_CLOSED:" .. tostring(itemIndex)
+    
     local myName = UnitName("player")
-    if GuildUtils.Host == myName or GuildUtils.SoloMode then self:OnResultsClosed(myName, self.QueueIndex) end
-    if not GuildUtils.SoloMode then GuildUtils:SendSync("RESULTS_CLOSED:" .. self.Index) end
+    if GuildUtils:IsAuthoritativeHost() then self:OnResultsClosed(myName, itemIndex) end
+    if not GuildUtils.SoloMode then GuildUtils:SendSync(msg) end
 end
 
 function GuildUtils.PartyRoller:OnResultsClosed(sender, index)
     if index ~= self.QueueIndex then return end
-    local isLeader = UnitIsGroupLeader("player") or GuildUtils.SoloMode
-    local lootMethod, mlPartyID = nil, nil
-    if GetLootMethod then lootMethod, mlPartyID = GetLootMethod() end
-    if isLeader or (lootMethod == "master" and mlPartyID == 0) then return end 
+    if GuildUtils:IsMasterLootActive() then return end 
     
-    local hostName = GuildUtils.Host or UnitName("player")
-    if hostName == UnitName("player") or GuildUtils.SoloMode then
+    if GuildUtils:IsAuthoritativeHost() then
         if self.ResultsAcks[sender] then return end
         self.ResultsAcks[sender] = true
         local totalExpected = (not GuildUtils.SoloMode and IsInGroup()) and GetNumGroupMembers() or 1

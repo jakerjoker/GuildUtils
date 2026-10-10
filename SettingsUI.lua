@@ -28,7 +28,6 @@ function GuildUtils.SettingsUI:TogglePanel()
         f.closeBtn = CreateFrame("Button", nil, f, "UIPanelCloseButton")
         f.closeBtn:SetPoint("TOPRIGHT", f, "TOPRIGHT", -2, -2)
 
-        -- 3-Tier Navigation Tabs
         local function CreateTab(id, text, xOffset, viewName)
             local btn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
             btn:SetSize(110, 24)
@@ -42,12 +41,10 @@ function GuildUtils.SettingsUI:TogglePanel()
         f.tabGeneral = CreateTab(2, "General", 125, "GENERAL")
         f.tabAppearance = CreateTab(3, "Appearance", 250, "APPEARANCE")
 
-        -- Content Container
         f.content = CreateFrame("Frame", nil, f)
         f.content:SetPoint("TOPLEFT", 15, -75)
         f.content:SetPoint("BOTTOMRIGHT", -15, 15)
 
-        -- Sub-Frames for Views
         f.AdminView = CreateFrame("Frame", nil, f.content)
         f.AdminView:SetAllPoints()
         f.GeneralView = CreateFrame("Frame", nil, f.content)
@@ -142,7 +139,6 @@ function GuildUtils.SettingsUI:TogglePanel()
 
         f.GeneralView.cbCompact = CreateCheckbox(f.GeneralView, "GUCBCompact", {"TOPLEFT", 10, -10}, "Enable Slim Compact Mode", "CompactMode")
         
-        -- The previously missing end) is safely capped at the bottom of this block
         f.GeneralView.cbCompact:SetScript("OnClick", function(self) 
             GuildUtilsDB.CompactMode = self:GetChecked()
             local scale = GuildUtilsDB.CompactMode and 0.85 or 1.0

@@ -5,7 +5,6 @@ GuildUtils.AuditRows = {}
 
 function GuildUtils:ToggleLedgerUI()
     if not self.LedgerFrame then
-        -- Slimmed width from 420 down to 260
         self.LedgerFrame = CreateFrame("Frame", "GuildUtilsLedgerFrame", UIParent, "BackdropTemplate")
         self.LedgerFrame:Hide()
         local f = self.LedgerFrame
@@ -29,7 +28,6 @@ function GuildUtils:ToggleLedgerUI()
         
         f.currentView = "BALANCES"
         
-        -- Compact Tab Buttons
         f.tabBalances = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
         f.tabBalances:SetSize(75, 22)
         f.tabBalances:SetPoint("TOPLEFT", 10, -35)
@@ -50,7 +48,6 @@ function GuildUtils:ToggleLedgerUI()
             GuildUtils:UpdateLedgerDisplay()
         end)
 
-        -- Slimmed Search Box
         f.searchBox = CreateFrame("EditBox", nil, f, "InputBoxTemplate")
         f.searchBox:SetSize(220, 20)
         f.searchBox:SetPoint("TOPLEFT", 15, -62)
@@ -65,7 +62,6 @@ function GuildUtils:ToggleLedgerUI()
         f.searchBox:SetScript("OnEditFocusGained", function(self) f.searchPlaceholder:Hide() end)
         f.searchBox:SetScript("OnEditFocusLost", function(self) if self:GetText() == "" then f.searchPlaceholder:Show() end end)
 
-        -- Slimmed Scroll Frame Area
         f.scrollFrame = CreateFrame("ScrollFrame", nil, f, "UIPanelScrollFrameTemplate")
         f.scrollFrame:SetPoint("TOPLEFT", 10, -90)
         f.scrollFrame:SetPoint("BOTTOMRIGHT", -25, 45)
@@ -74,7 +70,6 @@ function GuildUtils:ToggleLedgerUI()
         f.scrollChild:SetSize(210, 1)
         f.scrollFrame:SetScrollChild(f.scrollChild)
 
-        -- Footer Controls
         f.hostLabel = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
         f.hostLabel:SetPoint("BOTTOMLEFT", 12, 12)
         f.hostLabel:SetText("Host: None")
@@ -130,11 +125,9 @@ function GuildUtils:UpdateLedgerDisplay(searchQuery)
         
         local myName = UnitName("player")
         table.sort(sortedList, function(a, b)
-            -- Pin local player to the top
             if a.name == myName then return true end
             if b.name == myName then return false end
             
-            -- Sort the rest by balance, then alphabetically
             if a.balance ~= b.balance then return a.balance > b.balance end
             return a.name < b.name
         end)
@@ -165,15 +158,13 @@ function GuildUtils:UpdateLedgerDisplay(searchQuery)
                 row.nameText:SetText(data.name)
                 row.nameText:SetTextColor(unpack(style.nameColor))
                 
-                -- Check for tags
                 local isFrozen = GuildUtilsDB.Ledger.frozenAccounts and GuildUtilsDB.Ledger.frozenAccounts[data.guid]
                 local balDisplay = tostring(data.balance)
                 local tagString = ""
                 local cTags = GuildUtils.Constants and GuildUtils.Constants.StatusTags
                 
-                -- Apply Status Tags [GL], [G], [F], [T]
                 if isFrozen then
-                    local fColor = "FFFF00" -- Fallback color
+                    local fColor = "FFFF00"
                     if isFrozen == "F" then fColor = cTags and cTags.Freeze.defaultColor or "00BFFF"
                     elseif isFrozen == "GL" then fColor = cTags and cTags.GroupLeader.defaultColor or "FF8C00"
                     elseif isFrozen == "G" then fColor = cTags and cTags.InGroup.defaultColor or "FF8C00"
@@ -182,11 +173,9 @@ function GuildUtils:UpdateLedgerDisplay(searchQuery)
                     tagString = tagString .. "|cFF" .. fColor .. "[" .. tostring(isFrozen) .. "]|r "
                 end
                 
-                -- Prepend the tags to the player's name
                 row.nameText:SetText(tagString .. data.name)
                 row.nameText:SetTextColor(unpack(style.nameColor))
                 
-                -- Set the balance as a standalone number
                 row.balText:SetText(balDisplay)
                 row.balText:SetTextColor(unpack(style.balColor))
                 
@@ -233,7 +222,7 @@ function GuildUtils:UpdateLedgerDisplay(searchQuery)
                             
                             rootDescription:CreateButton(freezeLabel, function()
                                 if GuildUtils.LootCoin then 
-                                    local targetState = currentlyFrozen and "0" or "1"
+                                    local targetState = currentTag and "0" or "1"
                                     GuildUtils.LootCoin:ToggleManagementFreeze(data.guid, data.name, false, targetState) 
                                 end
                             end)
@@ -298,7 +287,6 @@ end
 
 local function CreateGuildPaneButton()
     if not CommunitiesFrame then return end
-    
     if _G["GuildUtilsLedgerButton"] then return end
 
     local ledgerBtn = CreateFrame("Button", "GuildUtilsLedgerButton", CommunitiesFrame, "UIPanelButtonTemplate")
@@ -333,7 +321,14 @@ local function CreateGuildPaneButton()
             if f:IsShown() then
                 f:Hide()
             else
-                if GuildUtilsDB and GuildUtilsDB.Ledger and GuildUtilsDB.Ledger.ActiveSession then
+                local s = GuildUtils.PartyRoller.State
+                if s == "BIDDING" or s == "RESULTS" then
+                    GuildUtils.PartyRoller:SetUIState(s)
+                elseif s == "PHASE_A" then
+                    GuildUtils.PartyRoller:ShowPhaseA()
+                elseif s == "PHASE_C" then
+                    GuildUtils.PartyRoller:ShowPhaseC()
+                elseif GuildUtilsDB and GuildUtilsDB.Ledger and GuildUtilsDB.Ledger.ActiveSession then
                     GuildUtils.PartyRoller:SetUIState("HUB_PANEL")
                 else
                     GuildUtils.PartyRoller:SetUIState("IDLE_PANEL")

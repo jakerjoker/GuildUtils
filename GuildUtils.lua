@@ -5,7 +5,8 @@ GuildUtils.Version = "1.1.0"
 GuildUtils.frame = CreateFrame("Frame")
 GuildUtils.framePool = {}
 GuildUtils.Host = nil
-GuildUtils.HeartbeatTimer = nil
+GuildUtils.HostTimeoutTimer = nil
+GuildUtils.HeartbeatTicker = nil
 GuildUtils.ElectionActive = false
 GuildUtils.ActivePeers = {}
 GuildUtils.SoloMode = false
@@ -70,9 +71,7 @@ function GuildUtils:ApplyTheme()
         f:SetFrameStrata("HIGH")
         f:SetToplevel(true)
         f:EnableMouse(true)
-        f:SetScript("OnMouseDown", function(self)
-            self:Raise()
-        end)
+        f:SetScript("OnMouseDown", function(self) self:Raise() end)
         
         if f.SetBackdrop then
             if style.backdrop then
@@ -86,11 +85,7 @@ function GuildUtils:ApplyTheme()
         if f.BgTexture then
             f.BgTexture:SetTexture(style.bgFile)
             f.BgTexture:SetVertexColor(unpack(style.bgColor))
-            if style.texCoords then
-                f.BgTexture:SetTexCoord(unpack(style.texCoords))
-            else
-                f.BgTexture:SetTexCoord(0, 1, 0, 1)
-            end
+            if style.texCoords then f.BgTexture:SetTexCoord(unpack(style.texCoords)) else f.BgTexture:SetTexCoord(0, 1, 0, 1) end
         end
         
         if f.title then f.title:SetTextColor(unpack(style.titleColor)) end
@@ -106,18 +101,44 @@ function GuildUtils:ApplyTheme()
     end
 
     ApplyStyleToFrame(GuildUtils.LedgerFrame)
-    if GuildUtils.PartyRoller and GuildUtils.PartyRoller.frame then
-        ApplyStyleToFrame(GuildUtils.PartyRoller.frame)
-    end
-    if GuildUtils.ContextMenu then
-        ApplyStyleToFrame(GuildUtils.ContextMenu)
-    end
+    if GuildUtils.PartyRoller and GuildUtils.PartyRoller.frame then ApplyStyleToFrame(GuildUtils.PartyRoller.frame) end
+    if GuildUtils.ContextMenu then ApplyStyleToFrame(GuildUtils.ContextMenu) end
 end
 
 -- ============================================================================
 -- CORE LOGIC, SECURITY, & CHAT ROUTING
 -- ============================================================================
--- ANTI-CHEAT: Checksum Generator for Log Integrity
+function GuildUtils:IsAuthoritativeHost()
+    return self.Host == UnitName("player") or self.SoloMode
+end
+
+function GuildUtils:IsMasterLootActive()
+    if self.SoloMode then return true end
+    if not IsInGroup() then return false end
+
+    local isLeader = UnitIsGroupLeader("player")
+
+    -- 1. API Failsafe: Handles beta/modern clients where GetLootMethod is deprecated (nil)
+    if type(GetLootMethod) ~= "function" then
+        return isLeader
+    end
+
+    local lootMethod, mlPartyID, mlRaidID = GetLootMethod()
+    
+    -- 2. The 2-Man Bug: WoW suppresses the "master" string in 2-player parties. 
+    -- If you are the leader of a 2-man group, we automatically authorize you.
+    if isLeader and (GetNumGroupMembers() <= 2) then
+        return true
+    end
+    
+    if not lootMethod or string.lower(lootMethod) ~= "master" then 
+        return false 
+    end
+    
+    local isML = (mlPartyID == 0)
+    return (isLeader or isML)
+end
+
 function GuildUtils:GenerateHash(dataString)
     local hash = 5381
     for i = 1, #dataString do
@@ -141,11 +162,8 @@ end
 
 function GuildUtils:Print(msg, alertTypeOrWarning)
     local alertType = "Normal"
-    if type(alertTypeOrWarning) == "string" then
-        alertType = alertTypeOrWarning
-    elseif alertTypeOrWarning == true then
-        alertType = "Election"
-    end
+    if type(alertTypeOrWarning) == "string" then alertType = alertTypeOrWarning
+    elseif alertTypeOrWarning == true then alertType = "Election" end
     
     local color = self:GetChatColor(alertType)
     local formattedMessage = string.format("|cFF%s[GuildUtils] %s|r", color, tostring(msg))
@@ -153,8 +171,14 @@ function GuildUtils:Print(msg, alertTypeOrWarning)
 end
 
 function GuildUtils:TriggerDesktopAlert()
-    if GuildUtilsDB and GuildUtilsDB.DesktopAlerts then
-        FlashClientIcon()
+    if GuildUtilsDB and GuildUtilsDB.DesktopAlerts then FlashClientIcon() end
+end
+
+function GuildUtils:AppendAuditLog(entry)
+    if not GuildUtilsDB or not GuildUtilsDB.Ledger or not GuildUtilsDB.Ledger.auditLog then return end
+    table.insert(GuildUtilsDB.Ledger.auditLog, entry)
+    if self.LedgerFrame and self.LedgerFrame:IsShown() and self.LedgerFrame.currentView == "AUDIT" then
+        self:UpdateLedgerDisplay(self.LedgerFrame.searchBox:GetText())
     end
 end
 
@@ -196,7 +220,6 @@ function GuildUtils:SendSync(msg, specificChannel, target)
     end
 end
 
--- NETWORK OPTIMIZATION: Chunked Sync for large audit logs
 function GuildUtils:SendChunkedSync(prefix, payload)
     if self.SoloMode then return end
     local maxLen = 200
@@ -210,9 +233,11 @@ end
 GuildUtils.frame:RegisterEvent("ADDON_LOADED")
 GuildUtils.frame:RegisterEvent("PLAYER_LOGIN")
 GuildUtils.frame:RegisterEvent("PLAYER_GUILD_UPDATE")
+GuildUtils.frame:RegisterEvent("GUILD_ROSTER_UPDATE")
 GuildUtils.frame:RegisterEvent("PLAYER_REGEN_DISABLED")
 GuildUtils.frame:RegisterEvent("PLAYER_REGEN_ENABLED")
 GuildUtils.frame:RegisterEvent("GROUP_ROSTER_UPDATE")
+GuildUtils.frame:RegisterEvent("GROUP_LEFT")
 C_ChatInfo.RegisterAddonMessagePrefix("GU_SYNC")
 GuildUtils.frame:RegisterEvent("CHAT_MSG_ADDON")
 
@@ -237,6 +262,7 @@ GuildUtils.frame:SetScript("OnEvent", function(self, event, ...)
     elseif event == "PLAYER_LOGIN" or event == "PLAYER_GUILD_UPDATE" then
         if event == "PLAYER_LOGIN" then
             GuildUtils:SendSync("VERSION:" .. GuildUtils.Version, "GUILD")
+            C_GuildInfo.GuildRoster()
         end
         local guildName = GetGuildInfo("player")
         if guildName and not GuildUtils.HasInitialized then
@@ -253,24 +279,38 @@ GuildUtils.frame:SetScript("OnEvent", function(self, event, ...)
                     end
                 end
             end
-            C_Timer.After(15, function()
+            GuildUtils:SendSync("GU_DISCOVER_HOST:req", "GUILD")
+            C_Timer.After(3, function()
                 if not GuildUtils.Host and not GuildUtils.ElectionActive then GuildUtils:StartElection() end
             end)
+        end
+    elseif event == "GUILD_ROSTER_UPDATE" then
+        if GuildUtils.LedgerFrame and GuildUtils.LedgerFrame:IsShown() then
+            GuildUtils:UpdateLedgerDisplay(GuildUtils.LedgerFrame.searchBox:GetText())
         end
     elseif event == "PLAYER_REGEN_DISABLED" then GuildUtils:SuspendSync()
     elseif event == "PLAYER_REGEN_ENABLED" then GuildUtils:ResumeSync()
     elseif event == "GROUP_ROSTER_UPDATE" then GuildUtils:ReconcileRoster(...)
+    elseif event == "GROUP_LEFT" then
+        if not GuildUtils.SoloMode and GuildUtilsDB and GuildUtilsDB.Ledger then
+            if GuildUtilsDB.Ledger.ActiveSession then
+                if GuildUtilsDB.Ledger.ActiveSession.leaderName == UnitName("player") then
+                    GuildUtils.LootCoin:EndGroupEvent() 
+                else
+                    GuildUtils:SendSync("SET_FREEZE:" .. UnitGUID("player") .. ":" .. UnitName("player") .. ":0", "GUILD")
+                end
+                GuildUtilsDB.Ledger.ActiveSession = nil
+                GuildUtilsDB.Ledger.LocalSessionSpent = 0
+            end
+        end
     elseif event == "CHAT_MSG_ADDON" then
         local prefix, text, channel, sender = ...
         if prefix == "GU_SYNC" then
             if UnitIsUnit(sender, "player") and not GuildUtils.SoloMode then return end
-            
             local playerName = UnitName("player")
             local senderName = strtrim((strsplit("-", sender)))
             local myName = strtrim((strsplit("-", playerName)))
-            
             if senderName == myName and not GuildUtils.SoloMode then return end
-            
             GuildUtils:HandleSyncMessage(senderName, text)
         end
     end
@@ -282,14 +322,19 @@ function GuildUtils:HandleSyncMessage(senderName, text)
     command = command or text
     payload = payload or ""
     
-    -- VERSION CONTROL
     if command == "VERSION" then
         if payload > self.Version then
             self:Print("Your GuildUtils addon is out of date (v" .. self.Version .. "). Please update to v" .. payload, true)
         end
-    -- ANTI-CHEAT VERIFICATION
+    elseif command == "GU_DISCOVER_HOST" then
+        if self:IsAuthoritativeHost() then
+            local ver = (GuildUtilsDB and GuildUtilsDB.Ledger and GuildUtilsDB.Ledger.version) or 0
+            self:SendSync("GU_HOST_ANNOUNCE:" .. ver, "GUILD")
+        end
+    elseif command == "GU_HOST_ANNOUNCE" then
+        self:AcknowledgeHeartbeat(senderName, tonumber(payload) or 0)
     elseif command == "LOG_HASH" then
-        local localLogState = "LOG_STATE_STRING" -- Placeholder for your serialized log state
+        local localLogState = "LOG_STATE_STRING" 
         local localHash = self:GenerateHash(localLogState)
         if payload ~= localHash then
             self:Debug("Hash mismatch from " .. senderName .. ". Flagging as tampered.")
@@ -297,7 +342,6 @@ function GuildUtils:HandleSyncMessage(senderName, text)
             GuildUtilsDB.Ledger.frozenAccounts[senderName] = "T"
             if GuildUtils.LedgerFrame and GuildUtils.LedgerFrame:IsShown() then self:UpdateLedgerDisplay() end
         end
-    -- CORE EVENT ROUTING
     elseif command == "HEARTBEAT" then GuildUtils:AcknowledgeHeartbeat(senderName, tonumber(payload))
     elseif command == "ELECTION" then
         local rankStr, verStr, guidStr, inGroupStr = strsplit(":", payload)
@@ -323,7 +367,7 @@ function GuildUtils:HandleSyncMessage(senderName, text)
         if index then GuildUtils.PartyRoller:ClientAdvanceQueue(index) end
     elseif command == "QUEUE_FINISHED" then GuildUtils.PartyRoller:ClientFinishQueue()
     elseif command == "BID_INTENT" then
-        if UnitIsGroupLeader("player") or GuildUtils.SoloMode then GuildUtils.PartyRoller:ProcessBidIntent(senderName, payload) end
+        if GuildUtils:IsMasterLootActive() then GuildUtils.PartyRoller:ProcessBidIntent(senderName, payload) end
     elseif command == "BID_CONFIRMED" then
         local pName, typeStr, amtStr, rollStr, guidStr, tieStr = strsplit(":", payload)
         GuildUtils.PartyRoller:OnBidReceived(pName, typeStr, amtStr, rollStr, guidStr, tieStr)
@@ -333,7 +377,9 @@ function GuildUtils:HandleSyncMessage(senderName, text)
     elseif command == "RESULTS_CLOSED" then
         local index = tonumber(payload)
         if index then GuildUtils.PartyRoller:OnResultsClosed(senderName, index) end
-    elseif command == "FREEZE_GROUP" then GuildUtils.LootCoin:ProcessGroupFreeze(payload)
+    elseif command == "FREEZE_GROUP" then 
+        GuildUtils.LootCoin:ProcessGroupFreeze(payload)
+        if GuildUtils.LedgerFrame and GuildUtils.LedgerFrame:IsShown() then GuildUtils:UpdateLedgerDisplay(GuildUtils.LedgerFrame.searchBox:GetText()) end
     elseif command == "MERGE_GROUP" then GuildUtils.LootCoin:ProcessGroupMerge(payload)
     elseif command == "TOGGLE_FREEZE" then
         local tGuid, tName = strsplit(":", payload)
@@ -350,7 +396,7 @@ function GuildUtils:HandleSyncMessage(senderName, text)
         else GuildUtils:Print(payload, false) end
     elseif command == "NOTIFY_GUILD" then GuildUtils:Print(payload, false)
     elseif command == "SYNC_REQUEST" then
-        if GuildUtils.Host == UnitName("player") then GuildUtils.LootCoin:SendLedgerSync(senderName) end
+        if self:IsAuthoritativeHost() then GuildUtils.LootCoin:SendLedgerSync(senderName) end
     elseif command == "SYNC_START" then
         local verStr, totalChunksStr = strsplit(":", payload)
         GuildUtils.LootCoin:ReceiveSyncStart(tonumber(verStr), tonumber(totalChunksStr))
@@ -369,7 +415,15 @@ end
 
 function GuildUtils:ReconcileRoster(...)
     if GuildUtilsDB and GuildUtilsDB.Ledger and GuildUtilsDB.Ledger.ActiveSession then
-        if UnitIsGroupLeader("player") or GuildUtils.SoloMode then
+        if not IsInGroup() and not GuildUtils.SoloMode then return end 
+
+        if UnitIsGroupLeader("player") then
+            -- BATON PASS: If WoW promoted us due to the old leader dropping/DCing, take over the session.
+            if GuildUtilsDB.Ledger.ActiveSession.leaderName ~= UnitName("player") then
+                GuildUtilsDB.Ledger.ActiveSession.leaderName = UnitName("player")
+                GuildUtils:Print("Previous group leader disconnected. You now control the active session.", true)
+            end
+            
             local prefix = IsInRaid() and "raid" or "party"
             local numGroup = IsInRaid() and GetNumGroupMembers() or GetNumSubgroupMembers()
             local newMembers = {}
@@ -398,13 +452,16 @@ function GuildUtils:AcknowledgeHeartbeat(hostName, hostLedgerVersion)
     local oldHost = GuildUtils.Host
     GuildUtils.Host = hostName
     
+    if GuildUtils.HeartbeatTicker then GuildUtils.HeartbeatTicker:Cancel(); GuildUtils.HeartbeatTicker = nil end
+    if GuildUtils.HostTimeoutTimer then GuildUtils.HostTimeoutTimer:Cancel() end
+    
     if oldHost ~= hostName and GuildUtils.LedgerFrame and GuildUtils.LedgerFrame:IsShown() then
         GuildUtils:UpdateLedgerDisplay(GuildUtils.LedgerFrame.searchBox:GetText())
     end
     
-    if GuildUtils.HeartbeatTimer then GuildUtils.HeartbeatTimer:Cancel() end
-    GuildUtils.HeartbeatTimer = C_Timer.NewTicker(90, function()
-        GuildUtils:Print("Host heartbeat lost (90s). Initiating election.", true)
+    local timeout = (GuildUtils.Constants and GuildUtils.Constants.HEARTBEAT_TIMEOUT) or 12
+    GuildUtils.HostTimeoutTimer = C_Timer.NewTicker(timeout, function()
+        GuildUtils:Print(string.format("Host heartbeat lost (%ds). Initiating election.", timeout), true)
         GuildUtils:StartElection()
     end)
     
@@ -416,6 +473,7 @@ function GuildUtils:AcknowledgeHeartbeat(hostName, hostLedgerVersion)
     end
     if GuildUtils.LootCoin then GuildUtils.LootCoin:PushPendingMerges() end
 end
+
 function GuildUtils:ProcessHostChallenge(senderVersion) end
 
 function GuildUtils:StartElection()
@@ -457,8 +515,14 @@ function GuildUtils:ConcludeElection()
         GuildUtils.ElectionActive = false
         GuildUtils.Host = UnitName("player")
         GuildUtils:Print("Election won. Assuming Authoritative Host role.", false)
+        
+        if GuildUtils.HostTimeoutTimer then GuildUtils.HostTimeoutTimer:Cancel(); GuildUtils.HostTimeoutTimer = nil end
+        if GuildUtils.HeartbeatTicker then GuildUtils.HeartbeatTicker:Cancel() end
+        
         if GuildUtils.LedgerFrame and GuildUtils.LedgerFrame:IsShown() then GuildUtils:UpdateLedgerDisplay(GuildUtils.LedgerFrame.searchBox:GetText()) end
-        C_Timer.NewTicker(5, function()
+        
+        local tickerInterval = (GuildUtils.Constants and GuildUtils.Constants.HEARTBEAT_INTERVAL) or 5
+        GuildUtils.HeartbeatTicker = C_Timer.NewTicker(tickerInterval, function()
             local ver = (GuildUtilsDB and GuildUtilsDB.Ledger and GuildUtilsDB.Ledger.version) or 0
             GuildUtils:SendSync("HEARTBEAT:" .. ver, "GUILD")
         end)
@@ -555,14 +619,9 @@ end
 
 SLASH_GUILDUTILSSTARTGROUP1 = "/gustartgroup"
 SlashCmdList["GUILDUTILSSTARTGROUP"] = function()
-    if not GuildUtils.SoloMode then
-        if not IsInGroup() then GuildUtils:Print("You are not in a group.", true) return end
-        local lootMethod, mlPartyID = nil, nil
-        if GetLootMethod then lootMethod, mlPartyID = GetLootMethod() end
-        if lootMethod ~= "master" then GuildUtils:Print("You are not currently in a masterloot group.", true) return end
-        local isLeader = UnitIsGroupLeader("player")
-        local isML = (mlPartyID == 0)
-        if not isLeader and not isML then GuildUtils:Print("You are not the group leader or master looter.", true) return end
+    if not GuildUtils:IsMasterLootActive() then
+        GuildUtils:Print("You are not currently in a masterloot group, or you are not the leader/master looter.", true) 
+        return 
     end
     GuildUtils.LootCoin:StartGroupEvent()
 end
@@ -573,12 +632,9 @@ SlashCmdList["GUILDUTILSENDGROUP"] = function()
         GuildUtils:Print("No active group event found.", true)
         return
     end
-    if not GuildUtils.SoloMode then
-        local isLeader = UnitIsGroupLeader("player")
-        local lootMethod, mlPartyID = nil, nil
-        if GetLootMethod then lootMethod, mlPartyID = GetLootMethod() end
-        local isML = (lootMethod == "master" and mlPartyID == 0)
-        if not isLeader and not isML then GuildUtils:Print("You are not the group leader or master looter.", true) return end
+    if not GuildUtils:IsMasterLootActive() then 
+        GuildUtils:Print("You are not the group leader or master looter.", true) 
+        return 
     end
     GuildUtils.LootCoin:EndGroupEvent()
 end

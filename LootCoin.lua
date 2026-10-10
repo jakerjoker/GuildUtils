@@ -1,7 +1,7 @@
 local addonName, GuildUtils = ...
 
 GuildUtils.LootCoin = {}
-GuildUtils.LootCoin.SessionKey = math.random(100000, 999999) -- Anti-Cheat Session Key
+GuildUtils.LootCoin.SessionKey = math.random(100000, 999999) 
 
 function GuildUtils.LootCoin:Initialize()
     if not GuildUtilsDB then GuildUtilsDB = {} end
@@ -29,17 +29,12 @@ function GuildUtils.LootCoin:BootstrapLedger()
     
     local numMembers = GetNumGuildMembers()
     for i = 1, numMembers do
-        -- The modern WoW API returns the GUID as the 17th argument
         local name, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, guid = GetGuildRosterInfo(i)
         
         if name and guid then
-            -- Strip the connected realm name for cleaner UI display
             local cleanName = string.match(name, "([^%-]+)") or name
             GuildUtilsDB.Ledger.roster[guid] = cleanName
-            
-            if not GuildUtilsDB.Ledger.balances[guid] then
-                GuildUtilsDB.Ledger.balances[guid] = 0
-            end
+            if not GuildUtilsDB.Ledger.balances[guid] then GuildUtilsDB.Ledger.balances[guid] = 0 end
         end
     end
     GuildUtils:Print("LootCoin ledger bootstrapped successfully.", false)
@@ -58,11 +53,9 @@ function GuildUtils.LootCoin:ProcessTransaction(guid, playerName, amount, reason
     GuildUtilsDB.Ledger.version = (GuildUtilsDB.Ledger.version or 1) + 1
     
     local timestamp = date("%Y-%m-%d %H:%M:%S")
-    -- Format changed here: removed "(%s)" and the 'guid' variable
     local entry = string.format("[%s] %s: %d LC (%s) - New Balance: %d", timestamp, playerName or "Unknown", amount, reason or "No reason", newBalance)
-    table.insert(GuildUtilsDB.Ledger.auditLog, entry)
+    GuildUtils:AppendAuditLog(entry)
     
-    -- Overflow Buffers
     if #GuildUtilsDB.Ledger.auditLog > 300 then
         GuildUtilsDB.Ledger.auditLog = {"[EMERGENCY] Audit Log auto roll over check with regular members for save otherwise last 300 entries were not archived!!!"}
         if GuildUtils.LedgerFrame then
@@ -99,7 +92,6 @@ function GuildUtils.LootCoin:PerformFactoryReset(sender)
         PENDING_CONSENSUS = false, PENDING_LOG_EXPORT = false
     }
     
-    -- Force the ledger to repopulate immediately after the data is wiped
     self:BootstrapLedger()
     
     GuildUtils:Print(string.format("LootCoin ledger FACTORY RESET by %s.", sender or "System"), true)
@@ -126,7 +118,6 @@ hooksecurefunc(GuildUtils.LootCoin, "ProcessTransaction", function(self, guid, p
     end
 end)
 
--- Absolute State Network Implementation
 function GuildUtils.LootCoin:ToggleManagementFreeze(guid, playerName, fromSync, targetState)
     self:Initialize()
     if not GuildUtilsDB.Ledger.frozenAccounts then GuildUtilsDB.Ledger.frozenAccounts = {} end
@@ -137,22 +128,12 @@ function GuildUtils.LootCoin:ToggleManagementFreeze(guid, playerName, fromSync, 
     local isCurrentlyFrozen = (GuildUtilsDB.Ledger.frozenAccounts[guid] == "F")
 
     if fromSync then
-        -- STRIP invisible network characters (this was causing the bug)
         targetState = tostring(targetState or ""):gsub("%s+", "")
-        
-        -- Process absolute state payload (1 = Freeze, 0 = Unfreeze)
-        if targetState == "1" then
-            GuildUtilsDB.Ledger.frozenAccounts[guid] = "F"
-        elseif targetState == "0" then
-            GuildUtilsDB.Ledger.frozenAccounts[guid] = nil
-        else
-            -- Fallback for legacy blind toggles from un-updated guild members
-            GuildUtilsDB.Ledger.frozenAccounts[guid] = isCurrentlyFrozen and nil or "F"
-        end
+        if targetState == "1" then GuildUtilsDB.Ledger.frozenAccounts[guid] = "F"
+        elseif targetState == "0" then GuildUtilsDB.Ledger.frozenAccounts[guid] = nil
+        else GuildUtilsDB.Ledger.frozenAccounts[guid] = isCurrentlyFrozen and nil or "F" end
     else
-        -- Initiate Local Click: Set the absolute target state we want
         local newState = isCurrentlyFrozen and "0" or "1"
-        
         if newState == "1" then
             GuildUtilsDB.Ledger.frozenAccounts[guid] = "F"
             GuildUtils:Print("Management freeze |F| applied to " .. tostring(playerName), true)
@@ -160,8 +141,6 @@ function GuildUtils.LootCoin:ToggleManagementFreeze(guid, playerName, fromSync, 
             GuildUtilsDB.Ledger.frozenAccounts[guid] = nil
             GuildUtils:Print("Management freeze |F| lifted for " .. tostring(playerName), false)
         end
-        
-        -- Broadcast the absolute state to the guild
         if not GuildUtils.SoloMode then
             GuildUtils:SendSync("SET_FREEZE:" .. guid .. ":" .. tostring(playerName) .. ":" .. newState, "GUILD")
         end
@@ -229,7 +208,7 @@ function GuildUtils.LootCoin:EndGroupEvent()
     local payload = mergeID .. "@@" .. leaderName .. "@@" .. table.concat(changes, ";;")
     
     GuildUtilsDB.Ledger.ActiveSession = nil
-    local isAuthHost = (GuildUtils.Host == UnitName("player")) or GuildUtils.SoloMode
+    local isAuthHost = GuildUtils:IsAuthoritativeHost()
     
     if isAuthHost then
         self:ProcessGroupMerge(payload)
@@ -293,7 +272,7 @@ function GuildUtils.LootCoin:ProcessGroupMerge(payload)
                 GuildUtilsDB.Ledger.balances[guid] = math.max(0, current + change)
                 local timestamp = date("%Y-%m-%d %H:%M:%S")
                 local logEntry = string.format("[%s] %s: balance change after group ran by: %s (Change: %d)", timestamp, name, leaderName, change)
-                table.insert(GuildUtilsDB.Ledger.auditLog, logEntry)
+                GuildUtils:AppendAuditLog(logEntry)
             end
         end
     end
@@ -315,7 +294,10 @@ GuildUtils.IncomingSyncBuffer = ""
 function GuildUtils.LootCoin:SendLedgerSync(requesterName)
     local version = GuildUtilsDB.Ledger.version or 1
     local dataParts = {}
-    for guid, bal in pairs(GuildUtilsDB.Ledger.balances) do table.insert(dataParts, guid .. "=" .. bal) end
+    for guid, bal in pairs(GuildUtilsDB.Ledger.balances) do 
+        local name = GuildUtilsDB.Ledger.roster[guid] or "Unknown"
+        table.insert(dataParts, guid .. "=" .. bal .. "=" .. name) 
+    end
     local fullString = table.concat(dataParts, ";")
     local chunkSize = 200
     local chunks = {}
@@ -332,8 +314,11 @@ function GuildUtils.LootCoin:ReceiveSyncEnd(version)
     local data = GuildUtils.IncomingSyncBuffer
     local newBalances = {}
     for pair in string.gmatch(data, "([^;]+)") do
-        local guid, balStr = strsplit("=", pair)
-        if guid and balStr then newBalances[guid] = tonumber(balStr) or 0 end
+        local guid, balStr, nameStr = strsplit("=", pair)
+        if guid and balStr then 
+            newBalances[guid] = tonumber(balStr) or 0 
+            if nameStr then GuildUtilsDB.Ledger.roster[guid] = nameStr end
+        end
     end
     GuildUtilsDB.Ledger.balances = newBalances
     GuildUtilsDB.Ledger.version = tonumber(version) or GuildUtilsDB.Ledger.version
