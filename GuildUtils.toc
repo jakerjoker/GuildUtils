@@ -1,13 +1,19 @@
-## Interface: 16001
+## Interface: 11403
 ## Title: GuildUtils
-## Notes: Comprehensive guild management, P2P syncing, and priority loot bidding.
-## Author: Jacob McLeod
+## Notes: WoW:Forever Add-on - GuildUtils P2P Economy and Loot Distribution
+## Author: Jacob
 ## Version: 1.0.0
-## SavedVariables: GuildUtilsDB
+## SavedVariables: GU_GlobalDB
+## SavedVariablesPerCharacter: GU_CharDB
 
-Constants.lua
-GuildUtils.lua
-LootCoin.lua
-LedgerUI.lua
-PartyRoller.lua
-SettingsUI.lua
+Core\Init.lua
+Core\Globals.lua
+Network\Outbox.lua
+Network\Heartbeat.lua
+UI\Framework.lua
+UI\Minimap.lua
+Modules\Ledger.lua
+Modules\PartyRoller.lua
+Modules\Contracts.lua
+Modules\Settings.lua
+Debug.lua
