@@ -1,46 +1,68 @@
 local addonName, GuildUtils = ...
 
--- 1. Name Normalization Wrapper
-function GuildUtils:FormatName(rawName)
-    if not rawName or rawName == "" then return nil end
-    -- Strip server tags (e.g., "Jacob-Atiesh" -> "Jacob")
-    local cleanName = Ambiguate(rawName, "none")
-    -- Force lowercase, then capitalize the first letter
-    cleanName = cleanName:lower():gsub("^%l", string.upper)
-    return cleanName
+function GuildUtils:Print(msg, isWarning)
+    local alertType = isWarning and "Election" or "Normal"
+    local color = (self.Constants and self.Constants.ChatAlerts[alertType]) and self.Constants.ChatAlerts[alertType].defaultColor or "00BFFF"
+    print(string.format("|cFF%s[GuildUtils]|r %s", color, tostring(msg)))
 end
 
--- 2. Cache Yielding Protocol (Wait for Server)
+function GuildUtils:FormatName(rawName)
+    if not rawName or rawName == "" then return nil end
+    local cleanName = Ambiguate(rawName, "none")
+    return cleanName:lower():gsub("^%l", string.upper)
+end
+
 GuildUtils.ItemCacheQueue = {}
 local cacheFrame = CreateFrame("Frame")
 cacheFrame:RegisterEvent("GET_ITEM_INFO_RECEIVED")
-
 cacheFrame:SetScript("OnEvent", function(self, event, itemID, success)
-    if event == "GET_ITEM_INFO_RECEIVED" and success then
-        if GuildUtils.ItemCacheQueue[itemID] then
-            -- Trigger all queued callbacks for this specific item now that data exists
-            for _, callback in ipairs(GuildUtils.ItemCacheQueue[itemID]) do
-                callback(itemID)
-            end
-            GuildUtils.ItemCacheQueue[itemID] = nil
-        end
+    if event == "GET_ITEM_INFO_RECEIVED" and success and GuildUtils.ItemCacheQueue[itemID] then
+        for _, callback in ipairs(GuildUtils.ItemCacheQueue[itemID]) do callback(itemID) end
+        GuildUtils.ItemCacheQueue[itemID] = nil
     end
 end)
 
--- Universal function to fetch item data safely
 function GuildUtils:GetItemOrYield(itemID, callback)
     local itemName, itemLink = GetItemInfo(itemID)
     if itemName then
-        -- Item is already cached, execute immediately
         callback(itemID, itemName, itemLink)
     else
-        -- Item is missing, queue the callback for when the server responds
-        if not self.ItemCacheQueue[itemID] then
-            self.ItemCacheQueue[itemID] = {}
-        end
+        if not self.ItemCacheQueue[itemID] then self.ItemCacheQueue[itemID] = {} end
         table.insert(self.ItemCacheQueue[itemID], function(id)
             local name, link = GetItemInfo(id)
             callback(id, name, link)
         end)
+    end
+end
+
+SLASH_GUILDUTILSLEDGER1, SLASH_GUILDUTILSLEDGER2 = "/gu", "/ledger"
+SlashCmdList["GUILDUTILSLEDGER"] = function() if GuildUtils.Ledger then GuildUtils.Ledger:Toggle() end end
+
+SLASH_GUILDUTILSLOOT1 = "/guloot"
+SlashCmdList["GUILDUTILSLOOT"] = function() if GuildUtils.PartyRoller then GuildUtils.PartyRoller:Toggle() end end
+
+SLASH_GUILDUTILSCONFIG1 = "/guconfig"
+SlashCmdList["GUILDUTILSCONFIG"] = function() if GuildUtils.SettingsUI then GuildUtils.SettingsUI:TogglePanel() end end
+
+SLASH_GUILDUTILSCONTRACTS1 = "/gubb"
+SlashCmdList["GUILDUTILSCONTRACTS"] = function() if GuildUtils.Contracts then GuildUtils.Contracts:Toggle() end end
+
+SLASH_GUILDUTILS_BID1 = "/gubid"
+SlashCmdList["GUILDUTILS_BID"] = function(msg)
+    if msg == "" then 
+        GuildUtils:Print("Usage: /gubid [Item Link]", true) 
+        return 
+    end
+    if GuildUtils.PartyRoller then GuildUtils.PartyRoller:HostStartRoll(msg) end
+end
+
+SLASH_GUILDUTILSSCAN1 = "/guscan"
+SlashCmdList["GUILDUTILSSCAN"] = function()
+    if IsInGuild() then
+        GuildUtils:Print("Requesting live roster update from server...", false)
+        if C_GuildInfo and C_GuildInfo.GuildRoster then C_GuildInfo.GuildRoster() 
+        elseif GuildRoster then GuildRoster() end
+    else
+        GuildUtils:Print("You are not currently in a guild. Roster scan failed.", true)
     end
 end

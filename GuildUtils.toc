@@ -1,4 +1,4 @@
-## Interface: 11403
+## Interface: 16001
 ## Title: GuildUtils
 ## Notes: WoW:Forever Add-on - GuildUtils P2P Economy and Loot Distribution
 ## Author: Jacob
@@ -6,12 +6,14 @@
 ## SavedVariables: GU_GlobalDB
 ## SavedVariablesPerCharacter: GU_CharDB
 
+Core\Constants.lua
 Core\Init.lua
 Core\Globals.lua
 Network\Outbox.lua
 Network\Heartbeat.lua
 UI\Framework.lua
 UI\Minimap.lua
+Modules\LootCoin.lua
 Modules\Ledger.lua
 Modules\PartyRoller.lua
 Modules\Contracts.lua

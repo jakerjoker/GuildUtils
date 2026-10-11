@@ -1,17 +1,24 @@
 local addonName, GuildUtils = ...
-_G.GuildUtils = GuildUtils -- Global access for Debug.lua and external macros
-
 local frame = CreateFrame("Frame")
 frame:RegisterEvent("ADDON_LOADED")
 
--- B1.0 Database Schemas
 local defaultGlobalDB = {
-    Ledger = {},
-    Contracts = {},
+    Ledger = { 
+        version = 1, 
+        balances = {}, 
+        auditLog = {}, 
+        frozenAccounts = {}, 
+        roster = {},
+        altMap = {} -- Maps Alt GUID -> Main GUID
+    },
+    Contracts = {
+        list = {}, -- Contract entries: {id, title, creatorGuid, creatorName, itemLink, count, reward, isGuildQuest, completed}
+        nextId = 1
+    },
     Settings = {
-        Hierarchy = { [0] = "GM", [1] = "RL", [2] = "EC", [3] = "Officer" },
+        Hierarchy = { [0] = "Guild Master", [1] = "Raid Leader", [2] = "Economy Council", [3] = "Officer" },
         HeartbeatRate = 10,
-        Quarantine = {}
+        AttendanceReward = 10
     }
 }
 
@@ -19,12 +26,9 @@ local defaultCharDB = {
     PartyRollerEnabled = true,
     SmartMinimap = true,
     ShowTooltips = true,
-    DynamicColors = true,
-    AchievementToasts = true,
-    UIPositions = {}
+    Theme = 1 -- 1: Dark Slate, 2: Citadel Steel, 3: Parchment Gold
 }
 
--- Recursive deep copy to safely inject missing schema updates
 local function CopyDefaults(src, dest)
     for k, v in pairs(src) do
         if type(v) == "table" then
