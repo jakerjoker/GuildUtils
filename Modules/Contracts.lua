@@ -65,65 +65,64 @@ function GuildUtils.Contracts:PublishContract(item, count, reward, isGuildQuest)
     self:UpdateBoard()
 end
 
+function GuildUtils.Contracts:InitializeUI()
+    if self.initialized then return end
+    
+    local mainFrame = GuildUtils.PartyRoller:InitializeUI()
+    local f = mainFrame.BountyContainer
+    self.Container = f
+    
+    f.colLeftText = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    f.colLeftText:SetPoint("TOPLEFT", 20, -10)
+    f.colLeftText:SetText("Open Guild Quests")
+
+    f.colRightText = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    f.colRightText:SetPoint("TOPLEFT", 300, -10)
+    f.colRightText:SetText("Personal Contracts")
+
+    local midDiv = f:CreateTexture(nil, "ARTWORK")
+    midDiv:SetColorTexture(0.3, 0.3, 0.3, 1)
+    midDiv:SetSize(1, 330)
+    midDiv:SetPoint("TOP", 0, -10)
+
+    f.scrollLeft = CreateFrame("ScrollFrame", nil, f)
+    f.scrollLeft:SetPoint("TOPLEFT", 10, -40)
+    f.scrollLeft:SetPoint("BOTTOMLEFT", 280, 50)
+    f.childLeft = CreateFrame("Frame", nil, f.scrollLeft)
+    f.childLeft:SetSize(250, 1)
+    f.scrollLeft:SetScrollChild(f.childLeft)
+
+    f.scrollRight = CreateFrame("ScrollFrame", nil, f)
+    f.scrollRight:SetPoint("TOPLEFT", 300, -40)
+    f.scrollRight:SetPoint("BOTTOMRIGHT", -10, 50)
+    f.childRight = CreateFrame("Frame", nil, f.scrollRight)
+    f.childRight:SetSize(250, 1)
+    f.scrollRight:SetScrollChild(f.childRight)
+
+    f.createBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    f.createBtn:SetSize(160, 24)
+    f.createBtn:SetPoint("BOTTOM", 0, 10)
+    f.createBtn:SetText("Post New Bounty")
+    f.createBtn:SetScript("OnClick", function() StaticPopup_Show("GUILDUTILS_CREATE_CONTRACT_MODAL") end)
+    
+    self.initialized = true
+end
+
 function GuildUtils.Contracts:Toggle()
-    if not self.Frame then
-        self.Frame = GuildUtils.UI:CreateTaintFreeFrame("GuildUtilsContractsFrame", UIParent, 600, 440) 
-        self.Frame:Hide()
-        self.Frame:SetPoint("CENTER", 0, -50)
-        
-        local f = self.Frame
-        f.title = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-        f.title:SetPoint("TOP", 0, -12)
-        f.title:SetText("GuildUtils: Bounty Board")
-        f.title:SetTextColor(1, 0.82, 0)
-        
-        local div = f:CreateTexture(nil, "ARTWORK")
-        div:SetColorTexture(0.3, 0.3, 0.3, 1)
-        div:SetSize(560, 1)
-        div:SetPoint("TOP", 0, -35)
-
-        -- Dual Columns
-        f.colLeftText = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-        f.colLeftText:SetPoint("TOPLEFT", 30, -45)
-        f.colLeftText:SetText("Open Guild Quests")
-
-        f.colRightText = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-        f.colRightText:SetPoint("TOPLEFT", 310, -45)
-        f.colRightText:SetText("Personal Contracts")
-
-        local midDiv = f:CreateTexture(nil, "ARTWORK")
-        midDiv:SetColorTexture(0.3, 0.3, 0.3, 1)
-        midDiv:SetSize(1, 330)
-        midDiv:SetPoint("TOP", 0, -45)
-
-        -- Scroll Left (Guild Quests)
-        f.scrollLeft = CreateFrame("ScrollFrame", nil, f)
-        f.scrollLeft:SetPoint("TOPLEFT", 20, -70)
-        f.scrollLeft:SetPoint("BOTTOMLEFT", 280, 50)
-        f.childLeft = CreateFrame("Frame", nil, f.scrollLeft)
-        f.childLeft:SetSize(250, 1)
-        f.scrollLeft:SetScrollChild(f.childLeft)
-
-        -- Scroll Right (Personal Contracts)
-        f.scrollRight = CreateFrame("ScrollFrame", nil, f)
-        f.scrollRight:SetPoint("TOPLEFT", 310, -70)
-        f.scrollRight:SetPoint("BOTTOMRIGHT", -20, 50)
-        f.childRight = CreateFrame("Frame", nil, f.scrollRight)
-        f.childRight:SetSize(250, 1)
-        f.scrollRight:SetScrollChild(f.childRight)
-
-        f.createBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-        f.createBtn:SetSize(160, 24)
-        f.createBtn:SetPoint("BOTTOM", 0, 12)
-        f.createBtn:SetText("Post New Bounty")
-        f.createBtn:SetScript("OnClick", function() StaticPopup_Show("GUILDUTILS_CREATE_CONTRACT_MODAL") end)
+    local f = GuildUtils.PartyRoller:InitializeUI()
+    if not self.initialized then self:InitializeUI() end
+    
+    if f:IsShown() and GuildUtils.ActiveTab == "BOUNTY" then 
+        f:Hide() 
+    else 
+        f:Show()
+        f.tabBounty:Click()
+        self:UpdateBoard()
     end
-
-    if self.Frame:IsShown() then self.Frame:Hide() else self.Frame:Show(); self:UpdateBoard() end
 end
 
 function GuildUtils.Contracts:UpdateBoard()
-    if not self.Frame or not self.Frame:IsShown() then return end
+    if not self.initialized or not GuildUtils.DashboardFrame or not GuildUtils.DashboardFrame:IsShown() then return end
     for _, r in ipairs(self.Rows) do r:Hide() end
     
     local yLeft, yRight = -5, -5
@@ -131,7 +130,7 @@ function GuildUtils.Contracts:UpdateBoard()
     
     for _, c in ipairs(GU_GlobalDB.Contracts.list or {}) do
         if not c.completed then
-            local parent = c.isGuildQuest and self.Frame.childLeft or self.Frame.childRight
+            local parent = c.isGuildQuest and self.Container.childLeft or self.Container.childRight
             local yOffset = c.isGuildQuest and yLeft or yRight
             
             local row = self.Rows[rowIndex]
@@ -174,8 +173,8 @@ function GuildUtils.Contracts:UpdateBoard()
             if c.isGuildQuest then yLeft = yLeft - 40 else yRight = yRight - 40 end
         end
     end
-    self.Frame.childLeft:SetHeight(math.abs(yLeft))
-    self.Frame.childRight:SetHeight(math.abs(yRight))
+    self.Container.childLeft:SetHeight(math.abs(yLeft))
+    self.Container.childRight:SetHeight(math.abs(yRight))
 end
 
 function GuildUtils.Contracts:OnNetworkContract(cmd, payload)
@@ -198,7 +197,6 @@ function GuildUtils.Contracts:OnNetworkContract(cmd, payload)
     end
 end
 
--- Mailbox Escrow Delivery Verification
 local mailMonitor = CreateFrame("Frame")
 mailMonitor:RegisterEvent("MAIL_INBOX_UPDATE")
 mailMonitor:SetScript("OnEvent", function(self, event)
@@ -225,7 +223,6 @@ mailMonitor:SetScript("OnEvent", function(self, event)
     end
 end)
 
--- Trade Window Escrow Delivery Verification
 local tradeMonitor = CreateFrame("Frame")
 tradeMonitor:RegisterEvent("TRADE_ACCEPT_UPDATE")
 tradeMonitor:RegisterEvent("UI_INFO_MESSAGE")

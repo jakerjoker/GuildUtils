@@ -1,8 +1,8 @@
 ## Interface: 16001
 ## Title: GuildUtils
-## Notes: WoW:Forever Add-on - GuildUtils P2P Economy and Loot Distribution
-## Author: Jacob
-## Version: 1.0.0
+## Notes: Comprehensive guild management, P2P syncing, and priority loot bidding.
+## Author: Jacob McLeod
+## Version: 1.1.0
 ## SavedVariables: GU_GlobalDB
 ## SavedVariablesPerCharacter: GU_CharDB
 

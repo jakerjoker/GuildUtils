@@ -1,6 +1,5 @@
 local addonName, GuildUtils = ...
 GuildUtils.Network = GuildUtils.Network or {}
-
 GuildUtils.Host = nil
 GuildUtils.HostTimeoutTimer = nil
 GuildUtils.HeartbeatTicker = nil
@@ -11,24 +10,33 @@ local f = CreateFrame("Frame")
 C_ChatInfo.RegisterAddonMessagePrefix("GU_SYNC")
 f:RegisterEvent("CHAT_MSG_ADDON")
 f:RegisterEvent("PLAYER_LOGIN")
+f:RegisterEvent("GROUP_LEFT")
+f:RegisterEvent("GROUP_ROSTER_UPDATE")
 
 f:SetScript("OnEvent", function(self, event, ...)
     if event == "PLAYER_LOGIN" then
         C_Timer.After(3, function()
             GuildUtils:QueueMessage("GU_DISCOVER_HOST:req", "GUILD")
-            C_Timer.After(3, function()
-                if not GuildUtils.Host and not GuildUtils.ElectionActive then GuildUtils.Network:StartElection() end
-            end)
+            C_Timer.After(3, function() if not GuildUtils.Host and not GuildUtils.ElectionActive then GuildUtils.Network:StartElection() end end)
         end)
     elseif event == "CHAT_MSG_ADDON" then
         local prefix, text, channel, sender = ...
         if prefix == "GU_SYNC" then
             if UnitIsUnit(sender, "player") and not GuildUtils.SoloMode then return end
-            local senderName = GuildUtils:FormatName(sender)
-            local myName = GuildUtils:FormatName(UnitName("player"))
-            if senderName == myName and not GuildUtils.SoloMode then return end
-            GuildUtils.Network:OnMessageReceived(prefix, text, channel, senderName)
+            GuildUtils.Network:OnMessageReceived(prefix, text, channel, GuildUtils:FormatName(sender))
         end
+    elseif event == "GROUP_LEFT" then
+        if not GuildUtils.SoloMode and GU_GlobalDB and GU_GlobalDB.Ledger and GU_GlobalDB.Ledger.ActiveSession then
+            if GU_GlobalDB.Ledger.ActiveSession.leaderName == UnitName("player") then
+                GuildUtils.LootCoin:EndGroupEvent()
+            else
+                GuildUtils:QueueMessage("SET_FREEZE:" .. UnitGUID("player") .. ":" .. UnitName("player") .. ":0", "GUILD")
+            end
+            GU_GlobalDB.Ledger.ActiveSession = nil
+            GU_GlobalDB.Ledger.LocalSessionSpent = 0
+        end
+    elseif event == "GROUP_ROSTER_UPDATE" then
+        if GuildUtils.LootCoin and GuildUtils.LootCoin.ReconcileRoster then GuildUtils.LootCoin:ReconcileRoster(...) end
     end
 end)
 
@@ -39,48 +47,42 @@ function GuildUtils.Network:OnMessageReceived(prefix, text, channel, senderName)
     command, payload = command or text, payload or ""
 
     if command == "GU_DISCOVER_HOST" then
-        if GuildUtils:IsAuthoritativeHost() then
-            local ver = (GU_GlobalDB and GU_GlobalDB.Ledger and GU_GlobalDB.Ledger.version) or 0
-            GuildUtils:QueueMessage("GU_HOST_ANNOUNCE:" .. ver, "GUILD")
-        end
-    elseif command == "GU_HOST_ANNOUNCE" or command == "HEARTBEAT" then
-        self:AcknowledgeHeartbeat(senderName, tonumber(payload) or 0)
-    elseif command == "REQ_SYNC" then
-        if GuildUtils:IsAuthoritativeHost() then
-            self:SendLedgerSyncPayload(senderName)
-        end
-    elseif command == "SYNC_CHUNK" then
-        self:ReceiveLedgerSyncChunk(payload)
+        if GuildUtils:IsAuthoritativeHost() then GuildUtils:QueueMessage("GU_HOST_ANNOUNCE:" .. (GU_GlobalDB.Ledger.version or 0), "GUILD") end
+    elseif command == "GU_HOST_ANNOUNCE" or command == "HEARTBEAT" then self:AcknowledgeHeartbeat(senderName, tonumber(payload) or 0)
+    elseif command == "REQ_SYNC" then if GuildUtils:IsAuthoritativeHost() then self:SendLedgerSyncPayload(senderName) end
+    elseif command == "SYNC_CHUNK" then self:ReceiveLedgerSyncChunk(payload)
     elseif command == "ELECTION" then
         local rankStr, verStr, guidStr = strsplit(":", payload)
         self:ProcessElection(senderName, tonumber(rankStr), tonumber(verStr), guidStr)
     elseif command == "SET_FREEZE" then
         local tGuid, tName, tState = strsplit(":", payload)
-        if GuildUtils.LootCoin then GuildUtils.LootCoin:ToggleManagementFreeze(tGuid, tName, tState) end
-    elseif command == "SET_ALT_LINK" then
-        local aGuid, aName, mGuid, mName = strsplit(":", payload)
-        if GU_GlobalDB and GU_GlobalDB.Ledger then
-            GU_GlobalDB.Ledger.altMap[aGuid] = mGuid
-            if GuildUtils.Ledger and GuildUtils.Ledger.Frame and GuildUtils.Ledger.Frame:IsShown() then GuildUtils.Ledger:UpdateDisplay() end
-        end
-    elseif command == "SET_ALT_UNLINK" then
-        local aGuid = payload
-        if GU_GlobalDB and GU_GlobalDB.Ledger then
-            GU_GlobalDB.Ledger.altMap[aGuid] = nil
-            if GuildUtils.Ledger and GuildUtils.Ledger.Frame and GuildUtils.Ledger.Frame:IsShown() then GuildUtils.Ledger:UpdateDisplay() end
-        end
-    elseif command == "START_ROLL" then
-        if GuildUtils.PartyRoller then GuildUtils.PartyRoller:ClientStartRoll(payload) end
+        if GuildUtils.LootCoin then GuildUtils.LootCoin:ToggleManagementFreeze(tGuid, tName, true, tState) end
+    elseif command == "FREEZE_GROUP" then
+        if GuildUtils.LootCoin then GuildUtils.LootCoin:ProcessGroupFreeze(payload) end
+    elseif command == "MERGE_GROUP" then
+        if GuildUtils.LootCoin then GuildUtils.LootCoin:ProcessGroupMerge(payload) end
+    elseif command == "MERGE_ACK" then
+        if GuildUtils.LootCoin then GuildUtils.LootCoin:ReceiveMergeAck(payload) end
+    elseif command == "NOTIFY_GROUP" then
+        if payload == "START" then
+            if GU_GlobalDB and GU_GlobalDB.Ledger then GU_GlobalDB.Ledger.LocalSessionSpent = 0 end
+            GuildUtils:Print("The loot event has started! Balances are frozen.", false)
+        else GuildUtils:Print(payload, false) end
+    elseif command == "START_QUEUE" then
+        if GuildUtils.PartyRoller then GuildUtils.PartyRoller:ClientStartQueue(payload) end
+    elseif command == "NEXT_ITEM" then
+        if GuildUtils.PartyRoller then GuildUtils.PartyRoller:ClientAdvanceQueue(tonumber(payload)) end
+    elseif command == "QUEUE_FINISHED" then
+        if GuildUtils.PartyRoller then GuildUtils.PartyRoller:ClientFinishQueue() end
     elseif command == "BID_INTENT" then
-        if GuildUtils:IsAuthoritativeHost() and GuildUtils.PartyRoller then 
-            GuildUtils.PartyRoller:HostProcessBid(senderName, payload) 
-        end
+        if GuildUtils:IsMasterLootActive() and GuildUtils.PartyRoller then GuildUtils.PartyRoller:HostProcessBid(senderName, payload) end
     elseif command == "BID_CONFIRMED" then
         if GuildUtils.PartyRoller then GuildUtils.PartyRoller:OnBidConfirmed(payload) end
-    elseif command == "CONTRACT_NEW" or command == "CONTRACT_FULFILL" then
-        if GuildUtils.Contracts and GuildUtils.Contracts.OnNetworkContract then
-            GuildUtils.Contracts:OnNetworkContract(command, payload)
-        end
+    elseif command == "BID_REJECTED" then
+        local targetGuid, reason = strsplit(":", payload)
+        if targetGuid == UnitGUID("player") then GuildUtils:Print("Bid Rejected: " .. reason, true) end
+    elseif command == "RESULTS_CLOSED" then
+        if GuildUtils.PartyRoller then GuildUtils.PartyRoller:OnResultsClosed(senderName, tonumber(payload)) end
     end
 end
 
@@ -92,46 +94,15 @@ function GuildUtils.Network:AcknowledgeHeartbeat(hostName, hostLedgerVersion)
     
     local myVersion = (GU_GlobalDB and GU_GlobalDB.Ledger and GU_GlobalDB.Ledger.version) or 0
     if hostLedgerVersion > myVersion and not GuildUtils:IsAuthoritativeHost() then
-        if GuildUtils.Ledger and GuildUtils.Ledger.UpdateSyncIndicator then GuildUtils.Ledger:UpdateSyncIndicator("PENDING") end
         GuildUtils:QueueMessage("REQ_SYNC:" .. myVersion, "WHISPER", hostName)
-    else
-        if GuildUtils.Ledger and GuildUtils.Ledger.UpdateSyncIndicator then GuildUtils.Ledger:UpdateSyncIndicator("SYNCED") end
     end
     
-    local timeout = (GuildUtils.Constants and GuildUtils.Constants.HEARTBEAT_TIMEOUT) or 25
+    local timeout = GuildUtils.Constants.HEARTBEAT_TIMEOUT or 12
     GuildUtils.HostTimeoutTimer = C_Timer.NewTicker(timeout, function()
         GuildUtils:Print("Host heartbeat lost. Initiating election.", true)
-        if GuildUtils.Ledger and GuildUtils.Ledger.UpdateSyncIndicator then GuildUtils.Ledger:UpdateSyncIndicator("OFFLINE") end
         self:StartElection()
     end)
-end
-
-function GuildUtils.Network:SendLedgerSyncPayload(targetPlayer)
-    if not GuildUtils:IsAuthoritativeHost() then return end
-    for guid, bal in pairs(GU_GlobalDB.Ledger.balances) do
-        local name = GU_GlobalDB.Ledger.roster[guid] or "Unknown"
-        GuildUtils:QueueMessage(string.format("SYNC_CHUNK:BAL:%s:%d:%s", guid, bal, name), "WHISPER", targetPlayer)
-    end
-    for altGuid, mainGuid in pairs(GU_GlobalDB.Ledger.altMap) do
-        GuildUtils:QueueMessage(string.format("SYNC_CHUNK:ALT:%s:%s", altGuid, mainGuid), "WHISPER", targetPlayer)
-    end
-    GuildUtils:QueueMessage("SYNC_CHUNK:VER:" .. GU_GlobalDB.Ledger.version, "WHISPER", targetPlayer)
-end
-
-function GuildUtils.Network:ReceiveLedgerSyncChunk(payload)
-    local subCmd, arg1, arg2, arg3 = strsplit(":", payload)
-    if subCmd == "BAL" then
-        local guid, bal, name = arg1, tonumber(arg2) or 0, arg3
-        GU_GlobalDB.Ledger.balances[guid] = bal
-        GU_GlobalDB.Ledger.roster[guid] = name
-    elseif subCmd == "ALT" then
-        local altGuid, mainGuid = arg1, arg2
-        GU_GlobalDB.Ledger.altMap[altGuid] = mainGuid
-    elseif subCmd == "VER" then
-        GU_GlobalDB.Ledger.version = tonumber(arg1) or GU_GlobalDB.Ledger.version
-        if GuildUtils.Ledger and GuildUtils.Ledger.UpdateSyncIndicator then GuildUtils.Ledger:UpdateSyncIndicator("SYNCED") end
-        if GuildUtils.Ledger and GuildUtils.Ledger.Frame and GuildUtils.Ledger.Frame:IsShown() then GuildUtils.Ledger:UpdateDisplay() end
-    end
+    if GuildUtils.LootCoin and GuildUtils.LootCoin.PushPendingMerges then GuildUtils.LootCoin:PushPendingMerges() end
 end
 
 function GuildUtils.Network:StartElection()
@@ -148,7 +119,6 @@ function GuildUtils.Network:ProcessElection(sender, senderRank, senderVersion, s
     local myRank = GuildControlGetNumRanks() or 10
     if IsInGuild() then _, _, myRank = GetGuildInfo("player") end
     local myVersion = (GU_GlobalDB and GU_GlobalDB.Ledger and GU_GlobalDB.Ledger.version) or 0
-    
     if senderVersion > myVersion then GuildUtils.ElectionActive = false
     elseif senderVersion == myVersion then
         if senderRank < myRank then GuildUtils.ElectionActive = false 
@@ -163,11 +133,7 @@ function GuildUtils.Network:ConcludeElection()
         GuildUtils:Print("Election won. Assuming Authoritative Host role.", false)
         if GuildUtils.HostTimeoutTimer then GuildUtils.HostTimeoutTimer:Cancel(); GuildUtils.HostTimeoutTimer = nil end
         if GuildUtils.HeartbeatTicker then GuildUtils.HeartbeatTicker:Cancel() end
-        
-        local interval = (GU_GlobalDB and GU_GlobalDB.Settings and GU_GlobalDB.Settings.HeartbeatRate) or 10
-        GuildUtils.HeartbeatTicker = C_Timer.NewTicker(interval, function()
-            local ver = (GU_GlobalDB and GU_GlobalDB.Ledger and GU_GlobalDB.Ledger.version) or 0
-            GuildUtils:QueueMessage("HEARTBEAT:" .. ver, "GUILD")
-        end)
+        local interval = (GU_GlobalDB and GU_GlobalDB.Settings and GU_GlobalDB.Settings.HeartbeatRate) or 5
+        GuildUtils.HeartbeatTicker = C_Timer.NewTicker(interval, function() GuildUtils:QueueMessage("HEARTBEAT:" .. (GU_GlobalDB.Ledger.version or 0), "GUILD") end)
     end
 end
