@@ -128,16 +128,24 @@ function GuildUtils.PartyRoller:InitializeUI()
     f.title:SetPoint("TOP", 0, -12)
     f.title:SetText("GuildUtils: Gear & Loot Manager")
     
+    -- UI TABS ----------------------------------------------------
     f.tabGL = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-    f.tabGL:SetSize(110, 24)
+    f.tabGL:SetSize(100, 24)
     f.tabGL:SetPoint("BOTTOMLEFT", 15, 10)
     f.tabGL:SetText("Gear & Loot")
 
     f.tabBounty = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-    f.tabBounty:SetSize(110, 24)
+    f.tabBounty:SetSize(100, 24)
     f.tabBounty:SetPoint("LEFT", f.tabGL, "RIGHT", 5, 0)
     f.tabBounty:SetText("Bounty Board")
 
+    -- Task 3: Raid Events Tab
+    f.tabEvents = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    f.tabEvents:SetSize(100, 24)
+    f.tabEvents:SetPoint("LEFT", f.tabBounty, "RIGHT", 5, 0)
+    f.tabEvents:SetText("Raid Events")
+
+    -- CONTAINERS -------------------------------------------------
     f.GLContainer = CreateFrame("Frame", nil, f)
     f.GLContainer:SetPoint("TOPLEFT", 0, -25)
     f.GLContainer:SetPoint("BOTTOMRIGHT", 0, 40)
@@ -147,9 +155,16 @@ function GuildUtils.PartyRoller:InitializeUI()
     f.BountyContainer:SetPoint("TOPLEFT", 0, -25)
     f.BountyContainer:SetPoint("BOTTOMRIGHT", 0, 40)
     f.BountyContainer:Hide()
+    
+    f.EventsContainer = CreateFrame("Frame", nil, f)
+    f.EventsContainer:SetPoint("TOPLEFT", 0, -25)
+    f.EventsContainer:SetPoint("BOTTOMRIGHT", 0, 40)
+    f.EventsContainer:Hide()
 
+    -- TAB CLICK HANDLERS -----------------------------------------
     f.tabGL:SetScript("OnClick", function()
         f.BountyContainer:Hide()
+        f.EventsContainer:Hide()
         f.GLContainer:Show()
         f:SetWidth(260)
         GuildUtils.PartyRoller:RefreshState()
@@ -159,13 +174,40 @@ function GuildUtils.PartyRoller:InitializeUI()
 
     f.tabBounty:SetScript("OnClick", function()
         f.GLContainer:Hide()
+        f.EventsContainer:Hide()
         f.BountyContainer:Show()
         f:SetSize(600, 440)
         f.title:SetText("GuildUtils: Bounty Board")
         GuildUtils.ActiveTab = "BOUNTY"
-        if GuildUtils.Contracts and GuildUtils.Contracts.UpdateBoard then GuildUtils.Contracts:UpdateBoard() end
+        
+        if GuildUtils.Contracts and GuildUtils.Contracts.InitializeUI then 
+            GuildUtils.Contracts:InitializeUI() 
+        end
+        if GuildUtils.Contracts and GuildUtils.Contracts.UpdateBoard then 
+            GuildUtils.Contracts:UpdateBoard() 
+        end
     end)
 
+    f.tabEvents:SetScript("OnClick", function()
+        f.GLContainer:Hide()
+        f.BountyContainer:Hide()
+        
+        if GuildUtils.Events and GuildUtils.Events.InitializeUI then 
+            GuildUtils.Events:InitializeUI() 
+        end
+        
+        f.EventsContainer:Show()
+        f:SetSize(600, 440)
+        f.title:SetText("GuildUtils: Raid & Event Signups")
+        GuildUtils.ActiveTab = "EVENTS"
+        
+        -- Trigger the render
+        if GuildUtils.Events and GuildUtils.Events.UpdateEventList then
+            GuildUtils.Events:UpdateEventList()
+        end
+    end)
+
+    -- GL CONTAINER PANELS ----------------------------------------
     local c = f.GLContainer
 
     c.IdlePanel = CreateFrame("Frame", nil, c); c.IdlePanel:SetAllPoints(c); c.IdlePanel:Hide()
@@ -353,7 +395,6 @@ function GuildUtils.PartyRoller:HostStartQueue(queueData, duration)
     self.QueueIndex = 1
     self.Duration = duration or 10
     
-    -- Correctly formats the queue for SoloMode testing to properly progress to the next item
     local parts = {}
     for _, itemData in ipairs(self.Queue) do table.insert(parts, itemData.link .. "@@" .. tostring(itemData.reserved)) end
     
@@ -388,7 +429,19 @@ end
 
 function GuildUtils.PartyRoller:ClientFinishQueue()
     if self.CountdownTimer then self.CountdownTimer:Cancel() end
-    if #self.Queue > 1 then self:ShowPhaseC() else self:SetUIState("HUB_PANEL") end
+    
+    if #self.Queue > 1 then 
+        self:ShowPhaseC() 
+    else 
+        self.Queue = {}
+        self.QueueIndex = 0
+        self.QueueResults = {}
+        GU_PendingLoot = {}
+        GU_ReservedStatus = {}
+        self.HasResponded = false
+        
+        self:SetUIState("HUB_PANEL") 
+    end
 end
 
 function GuildUtils.PartyRoller:HostNextItem()
@@ -421,13 +474,23 @@ function GuildUtils.PartyRoller:StartBidding(itemData)
         f:SetHeight(340 + (c.embeddedTooltip:GetHeight() or 0))
     end
     
-    c.passBtn:Show(); c.greedBtn:Show(); c.closeBtn:Hide()
+    -- Re-enable the buttons for the new roll phase
+    c.passBtn:Enable()
+    c.passBtn:Show()
+    c.greedBtn:Enable()
+    c.greedBtn:Show()
+    c.closeBtn:Hide()
     for i = 1, 5 do c.leaderboardRows[i]:Hide() end
     
     if itemData.reserved then
-        c.needBtn:Hide(); c.greedBtn:SetText("Gambit"); c.reservedWarning:Show()
+        c.needBtn:Hide()
+        c.greedBtn:SetText("Gambit")
+        c.reservedWarning:Show()
     else
-        c.needBtn:Show(); c.greedBtn:SetText("Greed"); c.reservedWarning:Hide()
+        c.needBtn:Enable()
+        c.needBtn:Show()
+        c.greedBtn:SetText("Greed")
+        c.reservedWarning:Hide()
     end
     
     c.queueText:SetText(#self.Queue > 1 and string.format("Item %d of %d", self.QueueIndex, #self.Queue) or "Priority Roll")
@@ -515,6 +578,15 @@ end
 function GuildUtils.PartyRoller:ShowResults()
     self.State = "RESULTS"
     local c = GuildUtils.DashboardFrame.GLContainer.PhaseB
+	
+    c.needBtn:Hide()
+    c.needBtn:Disable()
+    c.greedBtn:Hide()
+    c.greedBtn:Disable()
+    c.passBtn:Hide()
+    c.passBtn:Disable()
+    c.reservedWarning:Hide()
+	
     self:UpdateSpectatorBoard()
     
     local winnerBid = self.ActiveBids[1]

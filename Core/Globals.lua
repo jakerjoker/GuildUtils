@@ -100,3 +100,65 @@ SlashCmdList["GUILDUTILSSOLO"] = function()
         GuildUtils.Ledger:UpdateDisplay() 
     end
 end
+-- TASK 2 TEST: Simulate a brand new joiner
+SLASH_GUILDUTILSTESTJOIN1 = "/gutestjoin"
+SlashCmdList["GUILDUTILSTESTJOIN"] = function()
+    if not GuildUtils.SoloMode then
+        GuildUtils:Print("You must be in Solo Mode (/gusolo) to run the onboarding test.", true)
+        return
+    end
+    
+    local myGuid = UnitGUID("player")
+    local myName = UnitName("player")
+    local effGuid = GuildUtils.LootCoin and GuildUtils.LootCoin:GetEffectiveGuid(myGuid) or myGuid
+    
+    -- Wipe the player's join date and reset balance for a clean test
+    GU_GlobalDB.Ledger.joinDates = GU_GlobalDB.Ledger.joinDates or {}
+    GU_GlobalDB.Ledger.joinDates[effGuid] = nil
+    GU_GlobalDB.Ledger.balances[effGuid] = 0
+    
+    -- Trigger the bootstrapper manually
+    local success = GuildUtils.LootCoin:BootstrapPlayer(myGuid, myName)
+    if success then
+        GuildUtils:Print("TEST SUCCESS: Player bootstrapped. Check your Ledger for 50 LC and Bounty Board for Quests.", false)
+    end
+end
+
+-- TASK 2 TEST: Fast-forward time to bypass the grace period
+SLASH_GUILDUTILSFASTFORWARD1 = "/gufastforward"
+SlashCmdList["GUILDUTILSFASTFORWARD"] = function()
+    if not GuildUtils.SoloMode then return end
+    
+    local effGuid = GuildUtils.LootCoin and GuildUtils.LootCoin:GetEffectiveGuid(UnitGUID("player")) or UnitGUID("player")
+    
+    if GU_GlobalDB.Ledger.joinDates and GU_GlobalDB.Ledger.joinDates[effGuid] then
+        -- Subtract 49 hours (176400 seconds) from the join date to instantly clear the 48-hour window
+        GU_GlobalDB.Ledger.joinDates[effGuid] = GU_GlobalDB.Ledger.joinDates[effGuid] - 176400
+        GuildUtils:Print("TEST SUCCESS: Time fast-forwarded by 49 hours. Your grace period is now over.", false)
+    else
+        GuildUtils:Print("TEST FAIL: You do not have a join date yet. Run /gutestjoin first.", true)
+    end
+end
+-- TASK 2 TEST: Wipe all contracts from the database
+SLASH_GUILDUTILSCLEARCONTRACTS1 = "/guclearcontracts"
+SlashCmdList["GUILDUTILSCLEARCONTRACTS"] = function()
+    GU_GlobalDB.Contracts = { list = {}, nextId = 1 }
+    GuildUtils:Print("All contracts cleared.", false)
+    if GuildUtils.Contracts and GuildUtils.Contracts.UpdateBoard then
+        GuildUtils.Contracts:UpdateBoard()
+    end
+end
+-- TASK 2: Bulk import existing guild members
+SLASH_GUILDUTILSINITROSTER1 = "/guinitroster"
+SlashCmdList["GUILDUTILSINITROSTER"] = function()
+    if GuildUtils.LootCoin and GuildUtils.LootCoin.InitializeGuildRoster then
+        GuildUtils.LootCoin:InitializeGuildRoster()
+    end
+end
+-- INITIAL SETUP: One-time deployment for Guild Masters
+SLASH_GUILDUTILSINITGUILD1 = "/guinitguild"
+SlashCmdList["GUILDUTILSINITGUILD"] = function()
+    if GuildUtils.LootCoin and GuildUtils.LootCoin.InitializeGuild then
+        GuildUtils.LootCoin:InitializeGuild()
+    end
+end

@@ -1,39 +1,68 @@
 local addonName, GuildUtils = ...
-local frame = CreateFrame("Frame")
-frame:RegisterEvent("ADDON_LOADED")
+_G.GuildUtils = GuildUtils 
+GuildUtils.UI = GuildUtils.UI or {}
 
-local defaultGlobalDB = {
-    Ledger = { 
-        version = 1, balances = {}, auditLog = {}, frozenAccounts = {}, roster = {},
-        altMap = {}, LocalSessionSpent = 0, ActiveSession = nil,
-        PendingMerges = {}, ProcessedMerges = {}, PENDING_CONSENSUS = false, PENDING_LOG_EXPORT = false
-    },
-    Contracts = { list = {}, nextId = 1 },
-    Settings = { Hierarchy = { [0] = "GM", [1] = "RL", [2] = "EC", [3] = "Officer" }, HeartbeatRate = 5, AttendanceReward = 10 }
-}
-
-local defaultCharDB = {
-    PartyRollerEnabled = true, SmartMinimap = true, ShowTooltips = true,
-    Theme = 1, ActiveProfile = "Default", LedgerFontSize = 12,
-    Profiles = { Guild = { Colors = {} }, Personal = { Colors = {} }, Default = { Colors = {} } }
-}
-
-local function CopyDefaults(src, dest)
-    for k, v in pairs(src) do
-        if type(v) == "table" then
-            if type(dest[k]) ~= "table" then dest[k] = {} end
-            CopyDefaults(v, dest[k])
-        elseif dest[k] == nil then dest[k] = v end
+local initFrame = CreateFrame("Frame")
+initFrame:RegisterEvent("ADDON_LOADED")
+initFrame:SetScript("OnEvent", function(self, event, loadedAddon)
+    if loadedAddon == addonName then
+        GU_GlobalDB = GU_GlobalDB or {}
+        
+        -- Core Ledger Initialization
+        if not GU_GlobalDB.Ledger then
+            GU_GlobalDB.Ledger = { 
+                version = 1, 
+                balances = {}, 
+                roster = {}, 
+                frozenAccounts = {}, 
+                joinDates = {} 
+            }
+        end
+        
+        -- Module Databases 
+        GU_GlobalDB.Contracts = GU_GlobalDB.Contracts or { list = {}, nextId = 1 }
+        
+        -- TASK 3: Added the Events Database
+        GU_GlobalDB.Events = GU_GlobalDB.Events or { list = {}, nextId = 1 }
+        GU_GlobalDB.Settings = GU_GlobalDB.Settings or {}
     end
+end)
+
+-- ==========================================
+-- GUILD PARTITION & DATA PROTECTION
+-- ==========================================
+function GuildUtils:VerifyGuildPartition()
+    local currentGuild = GetGuildInfo("player")
+    if not currentGuild then return end
+    
+    if GU_GlobalDB.GuildName and GU_GlobalDB.GuildName ~= currentGuild then
+        GuildUtils:Print("Guild shift detected. Wiping local GuildUtils database to prevent cross-contamination.", true)
+        
+        -- Nuke the local database so it doesn't infect the new guild
+        GU_GlobalDB.Ledger = { 
+            version = 1, 
+            balances = {}, 
+            roster = {}, 
+            frozenAccounts = {}, 
+            joinDates = {} 
+        }
+        GU_GlobalDB.Contracts = { list = {}, nextId = 1 }
+        GU_GlobalDB.Events = { list = {}, nextId = 1 }
+        GU_GlobalDB.Settings = {}
+    end
+    
+    GU_GlobalDB.GuildName = currentGuild
 end
 
-frame:SetScript("OnEvent", function(self, event, arg1)
-    if event == "ADDON_LOADED" and arg1 == addonName then
-        GU_GlobalDB = GU_GlobalDB or {}
-        GU_CharDB = GU_CharDB or {}
-        CopyDefaults(defaultGlobalDB, GU_GlobalDB)
-        CopyDefaults(defaultCharDB, GU_CharDB)
-        print("|cFF00FF00GuildUtils B1.1 Core Loaded.|r")
-        self:UnregisterEvent("ADDON_LOADED")
-    end
+-- Create an invisible frame to listen for login/guild updates
+local partitionWatcher = CreateFrame("Frame")
+partitionWatcher:RegisterEvent("PLAYER_LOGIN")
+partitionWatcher:RegisterEvent("PLAYER_GUILD_UPDATE")
+partitionWatcher:SetScript("OnEvent", function(self, event)
+    -- Delay slightly on login so the WoW client has time to fetch the guild name from the server
+    C_Timer.After(2, function()
+        if GuildUtils.VerifyGuildPartition then
+            GuildUtils:VerifyGuildPartition()
+        end
+    end)
 end)

@@ -91,6 +91,17 @@ end
 
 function GuildUtils.LootCoin:EndGroupEvent()
     if not GU_GlobalDB.Ledger.ActiveSession then return end
+	
+	if GU_GlobalDB.Events and GU_GlobalDB.Events.list then
+        for _, event in ipairs(GU_GlobalDB.Events.list) do
+            -- Example logic: If an event matches today's date, push it 7 days ahead for a weekly recurring schedule
+            local mm, dd = string.match(event.date, "(%d+)/(%d+)")
+            if mm and dd then
+                -- Simple weekly increment logic or custom check can go here
+            end
+        end
+    end
+	
     local changes = {}
     for guid, data in pairs(GU_GlobalDB.Ledger.ActiveSession.members) do
         if data.change ~= 0 then table.insert(changes, string.format("%s:%s:%d", guid, data.name, data.change)) end
@@ -200,5 +211,176 @@ function GuildUtils.LootCoin:ReconcileRoster(...)
                 GuildUtils:QueueMessage("FREEZE_GROUP:" .. payload, "GUILD")
             end
         end
+    end
+end
+-- Initializes a new player into the economy with a timestamp, allowance, and starter quests
+function GuildUtils.LootCoin:BootstrapPlayer(guid, name)
+    GU_GlobalDB.Ledger.joinDates = GU_GlobalDB.Ledger.joinDates or {}
+    local effGuid = self:GetEffectiveGuid(guid)
+    
+    if not GU_GlobalDB.Ledger.joinDates[effGuid] then
+        -- Record join time
+        GU_GlobalDB.Ledger.joinDates[effGuid] = time()
+        GU_GlobalDB.Ledger.roster[effGuid] = name
+        
+        -- Mid-week joiner bootstrap allowance (50 LC baseline)
+        GU_GlobalDB.Ledger.balances[effGuid] = 50 
+        
+        GuildUtils:AppendAuditLog(string.format("[%s] Bootstrapped new profile for %s (50 LC Baseline)", date("%Y-%m-%d %H:%M:%S"), name))
+        
+        -- TASK 2 CHECK: Automatically generate onboarding Guild Quests for the new joiner
+        if GuildUtils.Contracts and GuildUtils.Contracts.DispatchOnboardingQuests then
+            GuildUtils.Contracts:DispatchOnboardingQuests(name)
+        end
+        
+        return true
+    end
+    return false
+end
+function GuildUtils.LootCoin:InitializeGuildRoster()
+    if not GuildUtils:IsAuthoritativeHost() then
+        GuildUtils:Print("Only the Authoritative Host can bulk-initialize the roster.", true)
+        return
+    end
+
+    local numGuildMembers = GetNumGuildMembers()
+    if numGuildMembers == 0 then
+        GuildUtils:Print("No guild members found. Open your Guild roster (J) to cache it from the server, then try again.", true)
+        return
+    end
+
+    GU_GlobalDB.Ledger.joinDates = GU_GlobalDB.Ledger.joinDates or {}
+    local addedCount = 0
+    
+    -- Backdate by 30 days so existing members instantly bypass the 48-hour grace period
+    local backdatedTime = time() - (30 * 24 * 60 * 60)
+
+    for i = 1, numGuildMembers do
+        -- Extract the player's name and GUID (GUID is the 17th return in the modern/classic API)
+        local name, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, guid = GetGuildRosterInfo(i)
+        if not guid then guid = select(17, GetGuildRosterInfo(i)) end
+        
+        if guid and name then
+            local effGuid = self:GetEffectiveGuid(guid)
+            local cleanName = GuildUtils:FormatName(name)
+            
+            -- Only initialize them if they aren't already tracked
+            if not GU_GlobalDB.Ledger.joinDates[effGuid] then
+                GU_GlobalDB.Ledger.joinDates[effGuid] = backdatedTime
+                GU_GlobalDB.Ledger.roster[effGuid] = cleanName
+                
+                -- Give them the baseline allowance if they have 0 LC
+                if not GU_GlobalDB.Ledger.balances[effGuid] then
+                    GU_GlobalDB.Ledger.balances[effGuid] = 50
+                end
+                
+                addedCount = addedCount + 1
+            end
+        end
+    end
+    
+    if addedCount > 0 then
+        GU_GlobalDB.Ledger.version = (GU_GlobalDB.Ledger.version or 1) + 1
+        GuildUtils:QueueMessage("HEARTBEAT:" .. GU_GlobalDB.Ledger.version, "GUILD")
+        if GuildUtils.Ledger and GuildUtils.Ledger.Frame and GuildUtils.Ledger.Frame:IsShown() then
+            GuildUtils.Ledger:UpdateDisplay()
+        end
+    end
+    
+    GuildUtils:Print(string.format("Roster Initialized! %d existing members imported with bypassed grace periods.", addedCount), false)
+end
+function GuildUtils.LootCoin:InitializeGuild()
+    -- 1. Authentication: Must be the Guild Master
+    local isGM = IsGuildLeader and IsGuildLeader() or IsInGuild() and (select(3, GetGuildInfo("player")) == 0)
+    if not isGM then
+        GuildUtils:Print("Access Denied: Only the Guild Master can perform the initial GuildUtils setup.", true)
+        return
+    end
+
+    -- 2. Data Protection: Ensure the database is completely empty
+    local isFresh = (not GU_GlobalDB.Ledger.version or GU_GlobalDB.Ledger.version <= 1)
+    local hasData = GU_GlobalDB.Ledger.balances and next(GU_GlobalDB.Ledger.balances) ~= nil
+    
+    if not isFresh or hasData then
+        GuildUtils:Print("Setup Aborted: GuildUtils is already initialized. You have existing ledger data.", true)
+        return
+    end
+
+    -- 3. Roster Validation: Ensure the client has cached the guild list
+    local numGuildMembers = GetNumGuildMembers()
+    if numGuildMembers == 0 then
+        GuildUtils:Print("No guild members found. Please open your Guild roster (J) to cache it from the server, then try again.", true)
+        return
+    end
+
+    -- 4. Execution: Bootstrap the Roster (50 LC + Grace Period Bypass)
+    GU_GlobalDB.Ledger.joinDates = GU_GlobalDB.Ledger.joinDates or {}
+    local addedCount = 0
+    local backdatedTime = time() - (30 * 24 * 60 * 60)
+
+    for i = 1, numGuildMembers do
+        local name, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, guid = GetGuildRosterInfo(i)
+        if not guid then guid = select(17, GetGuildRosterInfo(i)) end
+        
+        if guid and name then
+            local effGuid = self:GetEffectiveGuid(guid)
+            local cleanName = GuildUtils:FormatName(name)
+            
+            if not GU_GlobalDB.Ledger.joinDates[effGuid] then
+                GU_GlobalDB.Ledger.joinDates[effGuid] = backdatedTime
+                GU_GlobalDB.Ledger.roster[effGuid] = cleanName
+                GU_GlobalDB.Ledger.balances[effGuid] = 50
+                addedCount = addedCount + 1
+            end
+        end
+    end
+    
+    -- 5. Execution: Bootstrap the Bounty Board with Global Quests
+    local hostName = GuildUtils.Host or UnitName("player")
+    local function AddGlobalQuest(questType, q)
+        local cId = (GU_GlobalDB.Contracts.nextId or 1)
+        GU_GlobalDB.Contracts.nextId = cId + 1
+        
+        table.insert(GU_GlobalDB.Contracts.list, {
+            id = cId,
+            title = string.format("[%s] %s", questType, q.item),
+            count = q.count, reward = q.reward,
+            creatorGuid = "SYSTEM_QUEST", 
+            creatorName = hostName,
+            isGuildQuest = true, completed = false
+        })
+    end
+
+    -- Pulls from the recurring quests table you defined in Contracts.lua
+    if GuildUtils.Contracts and GuildUtils.Contracts.RecurringQuests then
+        for _, q in ipairs(GuildUtils.Contracts.RecurringQuests.Weekly or {}) do AddGlobalQuest("Weekly", q) end
+        for _, q in ipairs(GuildUtils.Contracts.RecurringQuests.Monthly or {}) do AddGlobalQuest("Monthly", q) end
+    end
+    
+    -- 6. Finalize and Push Network Sync
+    if addedCount > 0 then
+        -- Force the GM to become the Authoritative Host for the push
+        GuildUtils.Host = UnitName("player")
+        GuildUtils.ElectionActive = false
+        
+        -- Bump the ledger version to trigger the automated network sync
+        GU_GlobalDB.Ledger.version = (GU_GlobalDB.Ledger.version or 1) + 1
+        
+        GuildUtils:AppendAuditLog(string.format("[%s] SYSTEM INITIALIZATION: %s set up the guild economy (%d members added, default quests dispatched).", date("%Y-%m-%d %H:%M:%S"), UnitName("player"), addedCount))
+        
+        -- The Heartbeat broadcasts the new version, forcing all online guildmates to pull the file chunks
+        GuildUtils:QueueMessage("HEARTBEAT:" .. GU_GlobalDB.Ledger.version, "GUILD")
+        
+        -- Refresh open UIs
+        if GuildUtils.Ledger and GuildUtils.Ledger.Frame and GuildUtils.Ledger.Frame:IsShown() then
+            GuildUtils.Ledger:UpdateDisplay()
+        end
+        if GuildUtils.Contracts and GuildUtils.Contracts.UpdateBoard then
+            GuildUtils.Contracts:UpdateBoard()
+        end
+        
+        GuildUtils:Print(string.format("Setup Complete! %d members imported and Bounty Board initialized. Pushing data...", addedCount), false)
+    else
+        GuildUtils:Print("Setup failed: No valid members found to add.", true)
     end
 end

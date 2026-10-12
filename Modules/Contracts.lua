@@ -30,8 +30,38 @@ StaticPopupDialogs["GUILDUTILS_CONTRACT_DETAILS_MODAL"] = {
     timeout = 0, whileDead = true, hideOnEscape = true,
 }
 
+function GuildUtils.Contracts:GetGracePeriod(guid)
+    GU_GlobalDB.Ledger.joinDates = GU_GlobalDB.Ledger.joinDates or {}
+    local effGuid = GuildUtils.LootCoin and GuildUtils.LootCoin:GetEffectiveGuid(guid) or guid
+    local joinTime = GU_GlobalDB.Ledger.joinDates[effGuid]
+    
+    if not joinTime then
+        if GuildUtils.LootCoin then 
+            GuildUtils.LootCoin:BootstrapPlayer(guid, GU_GlobalDB.Ledger.roster[effGuid] or UnitName("player")) 
+        end
+        joinTime = time()
+    end
+
+    local timeActive = time() - joinTime
+    local gracePeriod = 48 * 60 * 60 
+    
+    if timeActive < gracePeriod then
+        return true, gracePeriod - timeActive
+    end
+    return false, 0
+end
+
 function GuildUtils.Contracts:PublishContract(item, count, reward, isGuildQuest)
     local myGuid = UnitGUID("player")
+    
+    -- TASK 2 CHECK: Restrict contract creation during the 48-hour grace period
+    local inGrace, timeRemaining = self:GetGracePeriod(myGuid)
+    if inGrace then
+        local hoursLeft = math.ceil(timeRemaining / 3600)
+        GuildUtils:Print(string.format("Bounty Board restricted during your 48-hour onboarding grace period (%d hours remaining).", hoursLeft), true)
+        return
+    end
+
     local effGuid = GuildUtils.LootCoin and GuildUtils.LootCoin:GetEffectiveGuid(myGuid) or myGuid
     local balance = (GU_GlobalDB.Ledger.balances[effGuid] or 0)
     
@@ -48,14 +78,9 @@ function GuildUtils.Contracts:PublishContract(item, count, reward, isGuildQuest)
     GU_GlobalDB.Contracts.nextId = cId + 1
 
     local newContract = {
-        id = cId,
-        title = item,
-        count = count,
-        reward = reward,
-        creatorGuid = myGuid,
-        creatorName = GuildUtils:FormatName(UnitName("player")),
-        isGuildQuest = isGuildQuest or false,
-        completed = false
+        id = cId, title = item, count = count, reward = reward,
+        creatorGuid = myGuid, creatorName = GuildUtils:FormatName(UnitName("player")),
+        isGuildQuest = isGuildQuest or false, completed = false
     }
     table.insert(GU_GlobalDB.Contracts.list, newContract)
 
@@ -85,9 +110,12 @@ function GuildUtils.Contracts:InitializeUI()
     midDiv:SetSize(1, 330)
     midDiv:SetPoint("TOP", 0, -10)
 
+    -- FIX: Removed conflicting BOTTOMLEFT anchor and explicitly set the Width
     f.scrollLeft = CreateFrame("ScrollFrame", nil, f)
     f.scrollLeft:SetPoint("TOPLEFT", 10, -40)
-    f.scrollLeft:SetPoint("BOTTOMLEFT", 280, 50)
+    f.scrollLeft:SetPoint("BOTTOMLEFT", 10, 50)
+    f.scrollLeft:SetWidth(270) 
+    
     f.childLeft = CreateFrame("Frame", nil, f.scrollLeft)
     f.childLeft:SetSize(250, 1)
     f.scrollLeft:SetScrollChild(f.childLeft)
@@ -95,6 +123,7 @@ function GuildUtils.Contracts:InitializeUI()
     f.scrollRight = CreateFrame("ScrollFrame", nil, f)
     f.scrollRight:SetPoint("TOPLEFT", 300, -40)
     f.scrollRight:SetPoint("BOTTOMRIGHT", -10, 50)
+    
     f.childRight = CreateFrame("Frame", nil, f.scrollRight)
     f.childRight:SetSize(250, 1)
     f.scrollRight:SetScrollChild(f.childRight)
@@ -123,9 +152,11 @@ end
 
 function GuildUtils.Contracts:UpdateBoard()
     if not self.initialized or not GuildUtils.DashboardFrame or not GuildUtils.DashboardFrame:IsShown() then return end
-    for _, r in ipairs(self.Rows) do r:Hide() end
     
-    local yLeft, yRight = -5, -5
+    -- Hide all existing rows first
+    for _, r in ipairs(self.Rows or {}) do r:Hide() end
+    
+    local yLeft, yRight = -15, -15
     local rowIndex = 1
     
     for _, c in ipairs(GU_GlobalDB.Contracts.list or {}) do
@@ -136,20 +167,29 @@ function GuildUtils.Contracts:UpdateBoard()
             local row = self.Rows[rowIndex]
             if not row then
                 row = CreateFrame("Frame", nil, parent)
-                row:SetSize(250, 36)
+                row:SetSize(260, 36)
+                
                 row.text = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
                 row.text:SetPoint("TOPLEFT", 0, 0)
                 row.text:SetJustifyH("LEFT")
+                row.text:SetWidth(190) -- Prevent long system quest titles from breaking the frame
+                row.text:SetWordWrap(false)
+                
                 row.detail = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
                 row.detail:SetPoint("BOTTOMLEFT", 0, 2)
+                
                 row.actionBtn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
                 row.actionBtn:SetSize(60, 18)
                 row.actionBtn:SetPoint("RIGHT", -5, 0)
+                
                 self.Rows[rowIndex] = row
             end
 
+            -- CRITICAL: Must clear previous anchors before reusing a frame in a scrolling list
+            row:ClearAllPoints()
             row:SetParent(parent)
-            row:SetPoint("TOPLEFT", 0, yOffset)
+            row:SetPoint("TOPLEFT", 5, yOffset)
+            
             row.text:SetText(string.format("#%d: %dx %s", c.id, c.count, c.title))
             row.detail:SetText(string.format("By: %s | Reward: |cFF00FF00%d LC|r", c.creatorName, c.reward))
             
@@ -170,11 +210,17 @@ function GuildUtils.Contracts:UpdateBoard()
             
             row:Show()
             rowIndex = rowIndex + 1
-            if c.isGuildQuest then yLeft = yLeft - 40 else yRight = yRight - 40 end
+            
+            if c.isGuildQuest then 
+                yLeft = yLeft - 40 
+            else 
+                yRight = yRight - 40 
+            end
         end
     end
-    self.Container.childLeft:SetHeight(math.abs(yLeft))
-    self.Container.childRight:SetHeight(math.abs(yRight))
+    
+    self.Container.childLeft:SetHeight(math.max(300, math.abs(yLeft)))
+    self.Container.childRight:SetHeight(math.max(300, math.abs(yRight)))
 end
 
 function GuildUtils.Contracts:OnNetworkContract(cmd, payload)
@@ -257,3 +303,108 @@ tradeMonitor:SetScript("OnEvent", function(self, event, ...)
         end
     end
 end)
+-- Calculates if a player is still within their 48-hour onboarding window
+function GuildUtils.Contracts:GetGracePeriod(guid)
+    GU_GlobalDB.Ledger.joinDates = GU_GlobalDB.Ledger.joinDates or {}
+    local effGuid = GuildUtils.LootCoin and GuildUtils.LootCoin:GetEffectiveGuid(guid) or guid
+    local joinTime = GU_GlobalDB.Ledger.joinDates[effGuid]
+    
+    -- Auto-bootstrap the player if they don't have a join date yet
+    if not joinTime then
+        if GuildUtils.LootCoin then 
+            GuildUtils.LootCoin:BootstrapPlayer(guid, GU_GlobalDB.Ledger.roster[effGuid] or UnitName("player")) 
+        end
+        joinTime = time()
+    end
+
+    local timeActive = time() - joinTime
+    local gracePeriod = 48 * 60 * 60 -- 48 hours in seconds
+    
+    if timeActive < gracePeriod then
+        return true, gracePeriod - timeActive
+    end
+    return false, 0
+end
+-- Define the default onboarding quests
+GuildUtils.Contracts.RecurringQuests = {
+    Weekly = {
+        { item = "Flask of Supreme Power", count = 5, reward = 100 },
+        { item = "Major Mana Potion", count = 20, reward = 50 },
+        { item = "Dense Grinding Stone", count = 40, reward = 25 }
+    },
+    Monthly = {
+        { item = "Arcane Crystal", count = 5, reward = 400 },
+        { item = "Black Lotus", count = 2, reward = 500 }
+    }
+}
+
+-- Dispatch function for new joiners (bypasses personal escrow deduction)
+function GuildUtils.Contracts:DispatchOnboardingQuests(playerName)
+    local hostName = GuildUtils.Host or UnitName("player")
+    
+    local function PublishSystemQuest(questType, q)
+        local cId = (GU_GlobalDB.Contracts.nextId or 1)
+        GU_GlobalDB.Contracts.nextId = cId + 1
+        
+        local newContract = {
+            id = cId,
+            title = string.format("[%s] %s (For: %s)", questType, q.item, playerName),
+            count = q.count,
+            reward = q.reward,
+            creatorGuid = "SYSTEM_QUEST", 
+            creatorName = hostName, -- Routes the mail to the active Host/Bank
+            isGuildQuest = true,
+            completed = false
+        }
+        table.insert(GU_GlobalDB.Contracts.list, newContract)
+        
+        -- Broadcast to the guild
+        local payload = string.format("%d:%s:%d:%d:%s:%s", cId, newContract.title, q.count, q.reward, "SYSTEM_QUEST", hostName)
+        GuildUtils:QueueMessage("CONTRACT_NEW:" .. payload, "GUILD")
+    end
+
+    for _, q in ipairs(self.RecurringQuests.Weekly) do PublishSystemQuest("Weekly", q) end
+    for _, q in ipairs(self.RecurringQuests.Monthly) do PublishSystemQuest("Monthly", q) end
+    
+    GuildUtils:Print("Onboarding Guild Quests automatically dispatched for " .. playerName, false)
+    if self.UpdateBoard then self:UpdateBoard() end
+end
+GuildUtils.Contracts.RecurringQuests = {
+    Weekly = {
+        { item = "Flask of Supreme Power", count = 5, reward = 100 },
+        { item = "Major Mana Potion", count = 20, reward = 50 },
+        { item = "Dense Grinding Stone", count = 40, reward = 25 }
+    },
+    Monthly = {
+        { item = "Arcane Crystal", count = 5, reward = 400 },
+        { item = "Black Lotus", count = 2, reward = 500 }
+    }
+}
+
+function GuildUtils.Contracts:DispatchOnboardingQuests(playerName)
+    local hostName = GuildUtils.Host or UnitName("player")
+    
+    local function PublishSystemQuest(questType, q)
+        local cId = (GU_GlobalDB.Contracts.nextId or 1)
+        GU_GlobalDB.Contracts.nextId = cId + 1
+        
+        local newContract = {
+            id = cId,
+            title = string.format("[%s] %s (For: %s)", questType, q.item, playerName),
+            count = q.count, reward = q.reward,
+            creatorGuid = "SYSTEM_QUEST", 
+            creatorName = hostName,
+            isGuildQuest = true, completed = false
+        }
+        table.insert(GU_GlobalDB.Contracts.list, newContract)
+        
+        local payload = string.format("%d:%s:%d:%d:%s:%s", cId, newContract.title, q.count, q.reward, "SYSTEM_QUEST", hostName)
+        GuildUtils:QueueMessage("CONTRACT_NEW:" .. payload, "GUILD")
+    end
+
+    for _, q in ipairs(self.RecurringQuests.Weekly) do PublishSystemQuest("Weekly", q) end
+    for _, q in ipairs(self.RecurringQuests.Monthly) do PublishSystemQuest("Monthly", q) end
+    
+    GuildUtils:Print("Onboarding Guild Quests automatically dispatched for " .. playerName, false)
+    if self.UpdateBoard then self:UpdateBoard() end
+end
