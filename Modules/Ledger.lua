@@ -2,16 +2,72 @@ local addonName, GuildUtils = ...
 GuildUtils.Ledger = {}
 GuildUtils.Ledger.Rows = {}
 
+-- ============================================================================
+-- THE TAINT-FREE OFFICER ADJUSTMENT MODAL
+-- ============================================================================
+function GuildUtils.Ledger:ShowOfficerAdjustmentModal(memberName, memberGuid, actionType)
+    if not self.Modal then
+        self.Modal = GuildUtils.UI:CreateTaintFreeFrame("GuildUtilsLCModal", UIParent, 340, 200)
+        self.Modal:SetPoint("CENTER")
+        self.Modal:SetFrameStrata("DIALOG")
+        
+        self.Modal.title = self.Modal:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
+        self.Modal.title:SetPoint("TOP", 0, -15)
+        
+        self.Modal.input = CreateFrame("EditBox", nil, self.Modal, "InputBoxTemplate")
+        self.Modal.input:SetSize(140, 30)
+        self.Modal.input:SetPoint("CENTER", 0, 10)
+        self.Modal.input:SetAutoFocus(true)
+        self.Modal.input:SetNumeric(true)
+        self.Modal.input:SetScript("OnEscapePressed", function(selfEb) selfEb:ClearFocus(); GuildUtils.Ledger.Modal:Hide() end)
+        
+        self.Modal.confirmBtn = CreateFrame("Button", nil, self.Modal, "UIPanelButtonTemplate")
+        self.Modal.confirmBtn:SetSize(120, 26)
+        self.Modal.confirmBtn:SetPoint("BOTTOM", 0, 20)
+        
+        GuildUtils.UI:ApplyTheme()
+    end
+    
+    local m = self.Modal
+    m.title:SetText(string.format("%s LC for %s", actionType, memberName))
+    m.input:SetText("")
+    m.input:SetFocus()
+    m.confirmBtn:SetText("Confirm " .. actionType)
+    
+    m.confirmBtn:SetScript("OnClick", function()
+        local amount = tonumber(m.input:GetText())
+        if amount and amount > 0 then
+            local actualAmount = actionType == "Add" and amount or -amount
+            if GuildUtils.LootCoin then 
+                GuildUtils.LootCoin:ProcessTransaction(memberGuid, memberName, actualAmount, "Manual Officer Adjustment") 
+            end
+            m:Hide()
+        else
+            GuildUtils:Print("Invalid LC amount entered.", true)
+        end
+    end)
+    
+    m:Show()
+end
+
+-- ============================================================================
+-- MAIN LEDGER UI TOGGLE & INITIALIZATION
+-- ============================================================================
 function GuildUtils.Ledger:Toggle()
     if not self.Frame then
-        self.Frame = GuildUtils.UI:CreateTaintFreeFrame("GuildUtilsLedgerFrame", UIParent, 260, 460)
+        local currentFont = (GU_CharDB and GU_CharDB.LedgerFontSize) or 12
+        local sizeDiff = currentFont - 12
+        local dynamicWidth = 260 + math.max(0, sizeDiff * 25)
+        
+        -- USING THE CUSTOM TAINT-FREE LIBRARY
+        self.Frame = GuildUtils.UI:CreateTaintFreeFrame("GuildUtilsLedgerFrame", UIParent, dynamicWidth, 460)
         self.Frame:Hide()
         self.Frame:SetPoint("CENTER")
         
         local f = self.Frame
         f.title = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
         f.title:SetPoint("TOP", 0, -12)
-        f.title:SetText(GuildUtils.Constants.Headers.MainLedger)
+        f.title:SetText("GuildUtils: Ledger")
 
         f.currentView = "BALANCES"
         
@@ -32,7 +88,7 @@ function GuildUtils.Ledger:Toggle()
         end)
 
         f.searchBox = CreateFrame("EditBox", nil, f, "InputBoxTemplate")
-        f.searchBox:SetSize(220, 20)
+        f.searchBox:SetSize(180 + math.max(0, sizeDiff * 20), 20)
         f.searchBox:SetPoint("TOPLEFT", 15, -62)
         f.searchBox:SetAutoFocus(false)
         f.searchBox:SetScript("OnTextChanged", function(selfEb) GuildUtils.Ledger:UpdateDisplay(selfEb:GetText()) end)
@@ -48,7 +104,7 @@ function GuildUtils.Ledger:Toggle()
         f.scrollFrame:SetPoint("BOTTOMRIGHT", -25, 15)
         
         f.scrollChild = CreateFrame("Frame", nil, f.scrollFrame)
-        f.scrollChild:SetSize(210, 1)
+        f.scrollChild:SetSize(210 + math.max(0, sizeDiff * 25), 1)
         f.scrollFrame:SetScrollChild(f.scrollChild)
 
         f.hostLabel = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
@@ -59,6 +115,9 @@ function GuildUtils.Ledger:Toggle()
     if self.Frame:IsShown() then self.Frame:Hide() else self.Frame:Show(); self:UpdateDisplay() end
 end
 
+-- ============================================================================
+-- DYNAMIC SCALING & RENDER ENGINE
+-- ============================================================================
 function GuildUtils.Ledger:UpdateDisplay(searchQuery)
     if not self.Frame or not self.Frame:IsShown() then return end
     
@@ -76,6 +135,17 @@ function GuildUtils.Ledger:UpdateDisplay(searchQuery)
     
     local fontSize = GU_CharDB.LedgerFontSize or 12
     local rowHeight = fontSize + 14
+    local sizeDiff = fontSize - 12
+    
+    local dynamicWidth = 260 + math.max(0, sizeDiff * 25)
+    local dynamicRowWidth = 210 + math.max(0, sizeDiff * 25)
+    
+    self.Frame:SetWidth(dynamicWidth)
+    self.Frame.searchBox:SetWidth(180 + math.max(0, sizeDiff * 20))
+    scrollChild:SetWidth(dynamicRowWidth)
+    
+    self.Frame.title:SetTextColor(unpack(style.titleColor))
+    self.Frame.hostLabel:SetTextColor(unpack(style.nameColor))
     
     if self.Frame.currentView == "BALANCES" then
         if not GU_GlobalDB or not GU_GlobalDB.Ledger or not GU_GlobalDB.Ledger.balances then return end
@@ -99,8 +169,8 @@ function GuildUtils.Ledger:UpdateDisplay(searchQuery)
                     row = CreateFrame("Frame", nil, scrollChild)
                     row.nameText = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
                     row.nameText:SetPoint("LEFT", 2, 0)
-                    row.nameText:SetWidth(130)
                     row.nameText:SetJustifyH("LEFT")
+                    
                     row.balText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
                     row.balText:SetPoint("RIGHT", -5, 0) 
                     
@@ -109,8 +179,8 @@ function GuildUtils.Ledger:UpdateDisplay(searchQuery)
                         if button == "RightButton" and GuildUtils:IsAuthoritativeHost() then
                             MenuUtil.CreateContextMenu(selfRow, function(owner, rootDescription)
                                 rootDescription:CreateTitle(data.name)
-                                rootDescription:CreateButton("Add LC", function() StaticPopup_Show("GUILDUTILS_LC_MODAL", "Add", data.name, {action = "Add", guid = data.guid, name = data.name}) end)
-                                rootDescription:CreateButton("Subtract LC", function() StaticPopup_Show("GUILDUTILS_LC_MODAL", "Subtract", data.name, {action = "Subtract", guid = data.guid, name = data.name}) end)
+                                rootDescription:CreateButton("Add LC", function() GuildUtils.Ledger:ShowOfficerAdjustmentModal(data.name, data.guid, "Add") end)
+                                rootDescription:CreateButton("Subtract LC", function() GuildUtils.Ledger:ShowOfficerAdjustmentModal(data.name, data.guid, "Subtract") end)
                                 local isFrozen = GU_GlobalDB.Ledger.frozenAccounts and GU_GlobalDB.Ledger.frozenAccounts[data.guid] == "F"
                                 rootDescription:CreateButton(isFrozen and "Unfreeze Account" or "Freeze Account", function()
                                     local tState = isFrozen and "0" or "1"
@@ -122,7 +192,8 @@ function GuildUtils.Ledger:UpdateDisplay(searchQuery)
                     self.Rows[rowIndex] = row
                 end
                 
-                row:SetSize(210, rowHeight)
+                row:SetSize(dynamicRowWidth, rowHeight)
+                row.nameText:SetWidth(120 + math.max(0, sizeDiff * 10))
                 
                 local fontPath1, _, flags1 = row.nameText:GetFont()
                 if fontPath1 then row.nameText:SetFont(fontPath1, fontSize, flags1) end
@@ -146,23 +217,45 @@ function GuildUtils.Ledger:UpdateDisplay(searchQuery)
                 
                 row.nameText:SetText(tagString .. data.name)
                 row.nameText:SetTextColor(unpack(style.nameColor))
-                row.balText:SetText(tostring(data.balance))
+                
+                local totalBal = data.balance
+                local heldBal = 0
+                local committedBal = 0
+                
+                if GU_GlobalDB.Ledger.ActiveSession and GU_GlobalDB.Ledger.ActiveSession.members[data.guid] then
+                    heldBal = math.abs(GU_GlobalDB.Ledger.ActiveSession.members[data.guid].change or 0)
+                end
+                
+                if GU_GlobalDB.Contracts and GU_GlobalDB.Contracts.list then
+                    for _, contract in ipairs(GU_GlobalDB.Contracts.list) do
+                        if not contract.completed and contract.creatorGuid == data.guid then
+                            committedBal = committedBal + (contract.reward or 0)
+                        end
+                    end
+                end
+                
+                local liquidBal = totalBal - heldBal - committedBal
+                row.balText:SetText(string.format("%d (C:%d/H:%d/L:%d)", totalBal, committedBal, heldBal, liquidBal))
                 row.balText:SetTextColor(unpack(style.balColor))
+                
                 row:Show()
                 yOffset = yOffset - rowHeight
                 rowIndex = rowIndex + 1
             end
         end
         scrollChild:SetHeight(math.abs(yOffset))
+        
     elseif self.Frame.currentView == "AUDIT" then
         if not self.AuditBox then
             self.AuditBox = CreateFrame("EditBox", nil, scrollChild)
             self.AuditBox:SetMultiLine(true)
             self.AuditBox:SetFontObject("GameFontHighlight")
-            self.AuditBox:SetWidth(180)
+            self.AuditBox:SetWidth(dynamicRowWidth - 10)
             self.AuditBox:SetAutoFocus(false)
             self.AuditBox:SetScript("OnEscapePressed", function(selfEb) selfEb:ClearFocus() end)
             self.AuditBox:SetScript("OnEditFocusGained", function(selfEb) selfEb:HighlightText() end)
+        else
+            self.AuditBox:SetWidth(dynamicRowWidth - 10)
         end
         
         local aFontPath, _, aFlags = self.AuditBox:GetFont()

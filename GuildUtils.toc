@@ -18,5 +18,7 @@ Modules\Ledger.lua
 Modules\PartyRoller.lua
 Modules\Contracts.lua
 Modules\Settings.lua
+Modules\InstanceJournal.lua
 Events.lua
 Debug.lua
+Tester.lua

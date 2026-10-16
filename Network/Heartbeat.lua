@@ -141,6 +141,12 @@ function GuildUtils.Network:OnMessageReceived(prefix, text, channel, senderName)
                 break
             end
         end
+    elseif command == "QUEST_CLAIM" then
+        local targetGuid, targetName, rewardStr = strsplit(":", payload)
+        local reward = tonumber(rewardStr) or 0
+        if GuildUtils:IsAuthoritativeHost() and GuildUtils.LootCoin and GuildUtils.LootCoin.ProcessTransaction then
+            GuildUtils.LootCoin:ProcessTransaction(targetGuid, targetName, reward, "Dungeon/Guild Quest Reward")
+        end
     end
 end
 
@@ -195,10 +201,6 @@ function GuildUtils.Network:ConcludeElection()
         GuildUtils.HeartbeatTicker = C_Timer.NewTicker(interval, function() GuildUtils:QueueMessage("HEARTBEAT:" .. (GU_GlobalDB.Ledger.version or 0), "GUILD") end)
     end
 end
-
--- ==========================================
--- LEDGER SYNCHRONIZATION ENGINE
--- ==========================================
 
 function GuildUtils.Network:SendLedgerSyncPayload(target)
     if not GuildUtils:IsAuthoritativeHost() then return end

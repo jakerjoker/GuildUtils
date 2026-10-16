@@ -1,9 +1,8 @@
 local addonName, GuildUtils = ...
 GuildUtils.Minimap = {}
 
--- Math to keep the button orbiting exactly on the minimap ring
 local function UpdateButtonPosition(btn, angle)
-    local radius = 105 -- Expanded to orbit completely outside the minimap ring
+    local radius = 105 
     local x = math.cos(math.rad(angle)) * radius
     local y = math.sin(math.rad(angle)) * radius
     btn:SetPoint("CENTER", Minimap, "CENTER", x, y)
@@ -69,6 +68,8 @@ end
 local frame = CreateFrame("Frame")
 frame:RegisterEvent("PLAYER_LOGIN")
 frame:SetScript("OnEvent", function()
+    -- TASK 1: Fresh Install Safety
+    GU_CharDB = GU_CharDB or {}
     GU_CharDB.MinimapLedgerPos = GU_CharDB.MinimapLedgerPos or { angle = 225 }
     GU_CharDB.MinimapGLPos = GU_CharDB.MinimapGLPos or { angle = 200 }
     
@@ -96,18 +97,15 @@ frame:SetScript("OnEvent", function()
                     f = GuildUtils.PartyRoller:InitializeUI() 
                 end
                 
-                -- True toggle: Closes the window if it is already visible
                 if f and f:IsShown() then
                     f:Hide()
                 elseif f then
-                    -- If hidden, open it and automatically route to the correct tab based on group state
                     f:Show()
-                    if IsInGroup() or GuildUtils.SoloMode then
+                    -- THE REROUTE: Auto-switch to G&L if grouped
+                    if IsInGroup() or IsInRaid() or GuildUtils.SoloMode then
                         f.tabGL:Click()
                     else
-                        if GuildUtils.Contracts then
-                            f.tabBounty:Click()
-                        end
+                        if GuildUtils.Contracts then f.tabBounty:Click() end
                     end
                 end
             end
@@ -124,6 +122,7 @@ frame:SetScript("OnEvent", function()
 end)
 
 function GuildUtils.Minimap:SetVisible(show)
+    GU_CharDB = GU_CharDB or {}
     GU_CharDB.SmartMinimap = show
     if show then
         if self.LedgerBtn then self.LedgerBtn:Show() end

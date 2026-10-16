@@ -1,5 +1,20 @@
 local addonName, GuildUtils = ...
 
+-- ============================================================================
+-- CONSTANTS & HELPERS
+-- ============================================================================
+GuildUtils.Constants = GuildUtils.Constants or {}
+GuildUtils.Constants.ChatAlerts = {
+    Normal = { defaultColor = "00BFFF" },
+    Election = { defaultColor = "FFD700" }
+}
+GuildUtils.Constants.StatusTags = {
+    Freeze = { defaultColor = "00BFFF" },
+    GroupLeader = { defaultColor = "FF8C00" },
+    InGroup = { defaultColor = "FF8C00" },
+    Tampered = { defaultColor = "FF4500" }
+}
+
 function GuildUtils:GetChatColor(alertType)
     if not GU_CharDB or not GU_CharDB.ActiveProfile then return self.Constants.ChatAlerts[alertType].defaultColor end
     local activeProfile = GU_CharDB.ActiveProfile
@@ -41,21 +56,57 @@ function GuildUtils:IsMasterLootActive()
 end
 
 function GuildUtils:AppendAuditLog(entry)
-    if not GU_GlobalDB or not GU_GlobalDB.Ledger or not GU_GlobalDB.Ledger.auditLog then return end
+    if not GU_GlobalDB or not GU_GlobalDB.Ledger then return end
+    GU_GlobalDB.Ledger.auditLog = GU_GlobalDB.Ledger.auditLog or {}
     table.insert(GU_GlobalDB.Ledger.auditLog, entry)
     if GuildUtils.Ledger and GuildUtils.Ledger.Frame and GuildUtils.Ledger.Frame:IsShown() and GuildUtils.Ledger.Frame.currentView == "AUDIT" then
         GuildUtils.Ledger:UpdateDisplay()
     end
 end
 
+-- ============================================================================
+-- THEME & STYLE REGISTRY (HIGH CONTRAST)
+-- ============================================================================
 GuildUtils.Styles = {
-    [1] = { name = "Blizzard Classic", backdrop = { edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border", tile = false, tileSize = 32, edgeSize = 32, insets = { left = 11, right = 12, top = 12, bottom = 11 } }, bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background", bgColor = {1, 1, 1, 1}, borderColor = {1, 1, 1, 1}, titleColor = {1, 0.96, 0.41, 1}, nameColor = {1, 0.82, 0, 1}, balColor = {1, 1, 1, 1}, texCoords = {0, 1, 0, 1} },
-    [2] = { name = "Modern Flat", backdrop = { edgeFile = "Interface\\Buttons\\WHITE8x8", tile = false, tileSize = 0, edgeSize = 1, insets = { left = 1, right = 1, top = 1, bottom = 1 } }, bgFile = "Interface\\Buttons\\WHITE8x8", bgColor = {0.05, 0.05, 0.05, 0.95}, borderColor = {0.3, 0.3, 0.3, 1}, titleColor = {1, 1, 1, 1}, nameColor = {1, 0.88, 0.1, 1}, balColor = {1, 1, 1, 1}, texCoords = {0, 1, 0, 1} },
-    
-    -- Properly restored to use your custom asset without being overwritten!
-    [3] = { name = "Floating Scroll", backdrop = nil, bgFile = "Interface\\AddOns\\GuildUtils\\Media\\MyParchment.tga", bgColor = {1, 1, 1, 1}, borderColor = {0, 0, 0, 0}, titleColor = {0.2, 0.1, 0.05, 1}, nameColor = {0.1, 0.1, 0.1, 1}, balColor = {0.2, 0.1, 0.05, 1}, texCoords = {0, 1, 0, 1} }
+    [1] = { 
+        name = "Blizzard Classic", 
+        backdrop = { edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border", tile = false, tileSize = 32, edgeSize = 32, insets = { left = 11, right = 12, top = 12, bottom = 11 } }, 
+        bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background", 
+        bgColor = {1, 1, 1, 1}, 
+        borderColor = {1, 1, 1, 1}, 
+        titleColor = {1, 0.82, 0, 1}, 
+        nameColor = {1, 0.96, 0.41, 1},  -- High Contrast Bright Gold
+        balColor = {1, 1, 1, 1},         -- Pure White
+        entryColor = {1, 1, 1, 1}        -- Pure White (For EditBoxes & Audit Log)
+    },
+    [2] = { 
+        name = "Modern Flat", 
+        backdrop = { edgeFile = "Interface\\Buttons\\WHITE8x8", tile = false, tileSize = 0, edgeSize = 1, insets = { left = 1, right = 1, top = 1, bottom = 1 } }, 
+        bgFile = "Interface\\Buttons\\WHITE8x8", 
+        bgColor = {0.05, 0.05, 0.05, 0.95}, -- Pitch Black Background
+        borderColor = {0.4, 0.4, 0.4, 1}, 
+        titleColor = {0, 0.8, 1, 1},     -- Cyan Header
+        nameColor = {0.2, 1, 0.2, 1},    -- Neon Green Names
+        balColor = {1, 1, 1, 1},         -- Pure White Balances
+        entryColor = {1, 1, 1, 1}        -- Pure White
+    },
+    [3] = { 
+        name = "Floating Scroll", 
+        backdrop = nil, 
+        bgFile = "Interface\\AddOns\\GuildUtils\\Media\\MyParchment.tga", 
+        bgColor = {1, 1, 1, 1}, 
+        borderColor = {0, 0, 0, 0}, 
+        titleColor = {0.2, 0.1, 0.05, 1}, 
+        nameColor = {0, 0, 0, 1},        -- Pure Black Names
+        balColor = {0.15, 0.1, 0.05, 1}, -- Dark Brown Balances
+        entryColor = {0, 0, 0, 1},       -- Pure Black
+        texCoords = {0, 1, 0, 1}   -- Custom crop coordinates
+    }
 }
 
+-- ============================================================================
+-- SLASH COMMANDS
+-- ============================================================================
 SLASH_GUILDUTILSLEDGER1, SLASH_GUILDUTILSLEDGER2 = "/gu", "/ledger"
 SlashCmdList["GUILDUTILSLEDGER"] = function() if GuildUtils.Ledger then GuildUtils.Ledger:Toggle() end end
 
@@ -77,88 +128,27 @@ SlashCmdList["GUILDUTILSENDGROUP"] = function() if GuildUtils:IsMasterLootActive
 SLASH_GUILDUTILS_BID1 = "/gubid"
 SlashCmdList["GUILDUTILS_BID"] = function(msg) if GuildUtils.PartyRoller then GuildUtils.PartyRoller:ParseBidCommand(msg) end end
 
-SLASH_GUILDUTILSNEXT1 = "/gunext"
-SlashCmdList["GUILDUTILSNEXT"] = function()
-    if not GuildUtils.SoloMode and not IsInGroup() then
-        GuildUtils:Print("You must be in a party/raid or have Solo Mode enabled (/gusolo).", true)
-        return
-    end
-    if GuildUtils.PartyRoller then GuildUtils.PartyRoller:HostNextItem() end
-end
-
 SLASH_GUILDUTILSSOLO1 = "/gusolo"
 SlashCmdList["GUILDUTILSSOLO"] = function()
     GuildUtils.SoloMode = not GuildUtils.SoloMode
     if GuildUtils.SoloMode then
         GuildUtils.Host = UnitName("player")
-        GuildUtils:Print("Solo Mode ENABLED. Host set to local player. Master Loot checks bypassed.", false)
+        GuildUtils:Print("Solo Mode ENABLED. Bypassing group restrictions for local testing.", false)
     else
         GuildUtils.Host = nil
-        GuildUtils:Print("Solo Mode DISABLED. Using standard party/raid logic.", false)
-    end
-    if GuildUtils.Ledger and GuildUtils.Ledger.Frame and GuildUtils.Ledger.Frame:IsShown() then 
-        GuildUtils.Ledger:UpdateDisplay() 
-    end
-end
--- TASK 2 TEST: Simulate a brand new joiner
-SLASH_GUILDUTILSTESTJOIN1 = "/gutestjoin"
-SlashCmdList["GUILDUTILSTESTJOIN"] = function()
-    if not GuildUtils.SoloMode then
-        GuildUtils:Print("You must be in Solo Mode (/gusolo) to run the onboarding test.", true)
-        return
+        GuildUtils:Print("Solo Mode DISABLED. Normal network synchronization active.", false)
     end
     
-    local myGuid = UnitGUID("player")
-    local myName = UnitName("player")
-    local effGuid = GuildUtils.LootCoin and GuildUtils.LootCoin:GetEffectiveGuid(myGuid) or myGuid
-    
-    -- Wipe the player's join date and reset balance for a clean test
-    GU_GlobalDB.Ledger.joinDates = GU_GlobalDB.Ledger.joinDates or {}
-    GU_GlobalDB.Ledger.joinDates[effGuid] = nil
-    GU_GlobalDB.Ledger.balances[effGuid] = 0
-    
-    -- Trigger the bootstrapper manually
-    local success = GuildUtils.LootCoin:BootstrapPlayer(myGuid, myName)
-    if success then
-        GuildUtils:Print("TEST SUCCESS: Player bootstrapped. Check your Ledger for 50 LC and Bounty Board for Quests.", false)
+    -- Force a live redraw of the Ledger if it's open so the [H] tag updates immediately
+    if GuildUtils.Ledger and GuildUtils.Ledger.Frame and GuildUtils.Ledger.Frame:IsShown() then
+        GuildUtils.Ledger:UpdateDisplay()
     end
 end
-
--- TASK 2 TEST: Fast-forward time to bypass the grace period
-SLASH_GUILDUTILSFASTFORWARD1 = "/gufastforward"
-SlashCmdList["GUILDUTILSFASTFORWARD"] = function()
-    if not GuildUtils.SoloMode then return end
-    
-    local effGuid = GuildUtils.LootCoin and GuildUtils.LootCoin:GetEffectiveGuid(UnitGUID("player")) or UnitGUID("player")
-    
-    if GU_GlobalDB.Ledger.joinDates and GU_GlobalDB.Ledger.joinDates[effGuid] then
-        -- Subtract 49 hours (176400 seconds) from the join date to instantly clear the 48-hour window
-        GU_GlobalDB.Ledger.joinDates[effGuid] = GU_GlobalDB.Ledger.joinDates[effGuid] - 176400
-        GuildUtils:Print("TEST SUCCESS: Time fast-forwarded by 49 hours. Your grace period is now over.", false)
-    else
-        GuildUtils:Print("TEST FAIL: You do not have a join date yet. Run /gutestjoin first.", true)
-    end
-end
--- TASK 2 TEST: Wipe all contracts from the database
-SLASH_GUILDUTILSCLEARCONTRACTS1 = "/guclearcontracts"
-SlashCmdList["GUILDUTILSCLEARCONTRACTS"] = function()
-    GU_GlobalDB.Contracts = { list = {}, nextId = 1 }
-    GuildUtils:Print("All contracts cleared.", false)
-    if GuildUtils.Contracts and GuildUtils.Contracts.UpdateBoard then
-        GuildUtils.Contracts:UpdateBoard()
-    end
-end
--- TASK 2: Bulk import existing guild members
-SLASH_GUILDUTILSINITROSTER1 = "/guinitroster"
-SlashCmdList["GUILDUTILSINITROSTER"] = function()
-    if GuildUtils.LootCoin and GuildUtils.LootCoin.InitializeGuildRoster then
-        GuildUtils.LootCoin:InitializeGuildRoster()
-    end
-end
--- INITIAL SETUP: One-time deployment for Guild Masters
 SLASH_GUILDUTILSINITGUILD1 = "/guinitguild"
 SlashCmdList["GUILDUTILSINITGUILD"] = function()
     if GuildUtils.LootCoin and GuildUtils.LootCoin.InitializeGuild then
         GuildUtils.LootCoin:InitializeGuild()
+    else
+        GuildUtils:Print("LootCoin module or InitializeGuild function not loaded.", true)
     end
 end
