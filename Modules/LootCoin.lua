@@ -262,3 +262,60 @@ function GuildUtils.LootCoin:ReceiveMergeAck(mergeID)
         GuildUtils:Print("Merge confirmed by Host. Cached payload cleared.", false)
     end
 end
+function GuildUtils.LootCoin:InitializeGuild()
+    local isGM = IsGuildLeader and IsGuildLeader() or IsInGuild() and (select(3, GetGuildInfo("player")) == 0)
+    if not isGM then
+        GuildUtils:Print("Access Denied: Only the Guild Master can perform the initial GuildUtils setup.", true)
+        return
+    end
+
+    self:Initialize()
+    GU_GlobalDB.Ledger.joinDates = GU_GlobalDB.Ledger.joinDates or {}
+    GU_GlobalDB.Ledger.roster = GU_GlobalDB.Ledger.roster or {}
+    
+    local numGuildMembers = GetNumGuildMembers()
+    if numGuildMembers == 0 then
+        GuildUtils:Print("No guild members found. Please open your Guild roster (J) to cache it from the server, then try again.", true)
+        return
+    end
+
+    local addedCount = 0
+    local backdatedTime = time() - (30 * 24 * 60 * 60)
+
+    for i = 1, numGuildMembers do
+        local name, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, guid = GetGuildRosterInfo(i)
+        if not guid then guid = select(17, GetGuildRosterInfo(i)) end
+        
+        if guid and name then
+            local effGuid = self:GetEffectiveGuid(guid)
+            local cleanName = GuildUtils:FormatName(name)
+            
+            if not GU_GlobalDB.Ledger.joinDates[effGuid] then
+                GU_GlobalDB.Ledger.joinDates[effGuid] = backdatedTime
+                GU_GlobalDB.Ledger.roster[effGuid] = cleanName
+                GU_GlobalDB.Ledger.balances[effGuid] = 50
+                addedCount = addedCount + 1
+            end
+        end
+    end
+    
+    if addedCount > 0 then
+        GuildUtils.Host = UnitName("player")
+        GuildUtils.ElectionActive = false
+        GU_GlobalDB.Ledger.version = (GU_GlobalDB.Ledger.version or 1) + 1
+        
+        if GuildUtils.AppendAuditLog then
+            GuildUtils:AppendAuditLog(string.format("[%s] SYSTEM INITIALIZATION: %s set up the guild economy (%d members added).", date("%Y-%m-%d %H:%M:%S"), UnitName("player"), addedCount))
+        end
+        
+        GuildUtils:QueueMessage("HEARTBEAT:" .. GU_GlobalDB.Ledger.version, "GUILD")
+        
+        if GuildUtils.Ledger and GuildUtils.Ledger.Frame and GuildUtils.Ledger.Frame:IsShown() then
+            GuildUtils.Ledger:UpdateDisplay()
+        end
+        
+        GuildUtils:Print(string.format("Setup Complete! %d members imported with 50 LC.", addedCount), false)
+    else
+        GuildUtils:Print("Setup failed: No valid members found to add.", true)
+    end
+end

@@ -152,3 +152,11 @@ SlashCmdList["GUILDUTILSINITGUILD"] = function()
         GuildUtils:Print("LootCoin module or InitializeGuild function not loaded.", true)
     end
 end
+SLASH_GUILDUTILSCLEARCONTRACTS1 = "/guclearcontracts"
+SlashCmdList["GUILDUTILSCLEARCONTRACTS"] = function()
+    GU_GlobalDB.Contracts = { list = {}, nextId = 1 }
+    GuildUtils:Print("All contracts cleared.", false)
+    if GuildUtils.Contracts and GuildUtils.Contracts.UpdateBoard then
+        GuildUtils.Contracts:UpdateBoard()
+    end
+end
