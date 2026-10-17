@@ -54,7 +54,6 @@ function GuildUtils.Events:InitializeUI()
         modal:Show()
     end)
 
-    -- QUEST STYLE: Title
     f.eventTitle = f:CreateFontString(nil, "OVERLAY", "QuestTitleFont")
     f.eventTitle:SetPoint("TOPLEFT", 245, -35)
     f.eventTitle:SetWidth(290)
@@ -62,7 +61,6 @@ function GuildUtils.Events:InitializeUI()
     f.eventTitle:SetTextColor(0, 0, 0)
     f.eventTitle:SetText("No Event Selected")
     
-    -- QUEST STYLE: Body Text
     f.eventInfo = f:CreateFontString(nil, "OVERLAY", "QuestFont")
     f.eventInfo:SetPoint("TOPLEFT", f.eventTitle, "BOTTOMLEFT", 0, -10)
     f.eventInfo:SetWidth(280)
@@ -606,7 +604,7 @@ function GuildUtils.Verification:ShowVerificationScreen(eventData, activeSession
     local yOffset = -5
     local rowIndex = 1
     
-    for playerName, data in pairs(activeSessionRoster) do
+    for playerGuid, data in pairs(activeSessionRoster) do
         local row = self.RosterRows[rowIndex]
         if not row then
             row = CreateFrame("Frame", nil, self.Frame.scrollChild)
@@ -632,13 +630,14 @@ function GuildUtils.Verification:ShowVerificationScreen(eventData, activeSession
         row:SetPoint("TOPLEFT", 0, yOffset)
         
         local classColor = RAID_CLASS_COLORS[data.class] or RAID_CLASS_COLORS["PRIEST"]
-        row.nameText:SetText(playerName)
+        row.nameText:SetText(data.name)
         row.nameText:SetTextColor(classColor.r, classColor.g, classColor.b)
         
         local mins = math.floor((data.timeInInstance or 0) / 60)
         row.metricText:SetText(string.format("Role: %s | Time: %d min", data.role or "N/A", mins))
         
-        row.playerName = playerName
+        row.playerGuid = playerGuid
+        row.playerName = data.name
         row:Show()
         
         yOffset = yOffset - 35
@@ -655,62 +654,82 @@ function GuildUtils.Verification:ProcessSignOff()
     local approvedPlayers = {}
     for _, row in ipairs(self.RosterRows) do
         if row:IsShown() and row.check:GetChecked() then
-            table.insert(approvedPlayers, row.playerName)
+            table.insert(approvedPlayers, {guid = row.playerGuid, name = row.playerName})
         end
     end
     
-    local payload = string.format("GU_LEADER_SIGNOFF:%s:%s", 
-        tostring(self.CurrentEvent.id or "UnknownEvent"), 
-        table.concat(approvedPlayers, ",")
-    )
+    local eventID = tostring(self.CurrentEvent.id or "UnknownEvent")
+    local basePay = tonumber(self.CurrentEvent.basePay) or 0
+    local earlyBonus = tonumber(self.CurrentEvent.earlyBonus) or 0
+    local rewardAmount = basePay + earlyBonus
     
-    GuildUtils:QueueMessage(payload, "PARTY")
-    if IsInRaid() then GuildUtils:QueueMessage(payload, "RAID") end
+    local eventTitle = "Raid Event"
+    if GU_GlobalDB and GU_GlobalDB.Events and GU_GlobalDB.Events.list then
+        for _, e in ipairs(GU_GlobalDB.Events.list) do
+            if tostring(e.id) == eventID then
+                eventTitle = e.title
+                break
+            end
+        end
+    end
     
-    GuildUtils:Print("Event finalized. Sign-offs broadcasted to participants.", false)
+    if GuildUtils:IsAuthoritativeHost() then
+        if rewardAmount > 0 and GuildUtils.LootCoin and GuildUtils.LootCoin.ProcessTransaction then
+            for _, pData in ipairs(approvedPlayers) do
+                GuildUtils.LootCoin:ProcessTransaction(pData.guid, pData.name, rewardAmount, "Event Verified: " .. eventTitle)
+            end
+        end
+        GuildUtils:Print("Event finalized. Payouts applied directly to master ledger.", false)
+    else
+        local serializedPlayers = {}
+        for _, pData in ipairs(approvedPlayers) do
+            table.insert(serializedPlayers, pData.guid .. "==" .. pData.name)
+        end
+        
+        local payload = string.format("GU_LEADER_SIGNOFF:%s:%d:%s", eventID, rewardAmount, table.concat(serializedPlayers, ","))
+        GuildUtils:QueueMessage(payload, "GUILD")
+        GuildUtils:Print("Event finalized. Approval sheet sent to Host for payout.", false)
+    end
+
+    -- FIXED: Force the linked event selector back to "None" once sign-off is completed
+    if GuildUtils.PartyRoller and GuildUtils.PartyRoller.ResetIdlePanel then
+        GuildUtils.PartyRoller:ResetIdlePanel()
+    end
 end
 
+-- Fallback network processor for remote officers sending sign-offs to a distant Host
 local p2pListener = CreateFrame("Frame")
 p2pListener:RegisterEvent("CHAT_MSG_ADDON")
 p2pListener:SetScript("OnEvent", function(self, event, prefix, message, channel, sender)
     if prefix ~= "GU_SYNC" then return end
-    local command, eventID, approvedList = strsplit(":", message, 3)
+    
+    local command, payload = string.match(message, "^([^:]+):(.*)$")
+    if not command then return end
     
     if command == "GU_LEADER_SIGNOFF" then
-        local myName = UnitName("player")
-        local isApproved = false
+        local eventID, rewardStr, approvedList = string.match(payload, "^([^:]+):([^:]+):(.*)$")
+        if not eventID then return end
         
-        for approvedName in string.gmatch(approvedList or "", "([^,]+)") do
-            if approvedName == myName then
-                isApproved = true
-                break
-            end
-        end
-        
-        if isApproved then
-            local signature = "V1" .. time() 
-            local claimPayload = string.format("GU_CLAIM:%s:%s:%s", eventID, myName, signature)
-            GuildUtils:Print("Received leader sign-off! Dispatching claim to Authoritative Host...", false)
-            GuildUtils:QueueMessage(claimPayload, "GUILD")
-        end
-        
-    elseif command == "GU_CLAIM" then
-        local claimEventID, claimPlayer, signature = strsplit(":", approvedList, 3)
-        if GuildUtils.IsAuthoritativeHost then
-            GuildUtils:Print(string.format("Received verified claim from %s. Processing LC reward...", claimPlayer), false)
-            
-            local rewardAmount = 0
-            if GU_GlobalDB and GU_GlobalDB.Events then
-                for _, e in ipairs(GU_GlobalDB.Events.list) do
-                    if tostring(e.id) == claimEventID then
-                        rewardAmount = (e.basePay or 0) + (e.earlyBonus or 0)
-                        break
+        if GuildUtils:IsAuthoritativeHost() then
+            local rewardAmount = tonumber(rewardStr) or 0
+            if rewardAmount > 0 and GuildUtils.LootCoin and GuildUtils.LootCoin.ProcessTransaction then
+                
+                local eventTitle = "Raid Event"
+                if GU_GlobalDB and GU_GlobalDB.Events and GU_GlobalDB.Events.list then
+                    for _, e in ipairs(GU_GlobalDB.Events.list) do
+                        if tostring(e.id) == eventID then
+                            eventTitle = e.title
+                            break
+                        end
                     end
                 end
-            end
-            
-            if rewardAmount > 0 and GuildUtils.LootCoin and GuildUtils.LootCoin.ProcessTransaction then
-                GuildUtils.LootCoin:ProcessTransaction(nil, claimPlayer, rewardAmount, "Event Verified: " .. claimEventID)
+                
+                for approvedData in string.gmatch(approvedList or "", "([^,]+)") do
+                    local pGuid, pName = string.match(approvedData, "^(.*)==(.*)$")
+                    if pGuid and pName then
+                        GuildUtils.LootCoin:ProcessTransaction(pGuid, pName, rewardAmount, "Event Verified: " .. eventTitle)
+                    end
+                end
             end
         end
     end

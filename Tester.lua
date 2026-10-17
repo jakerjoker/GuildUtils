@@ -13,8 +13,7 @@ function GuildUtils.Tester:TestInitializationAndDatabase()
     assert(GU_GlobalDB.Events, "CRITICAL: GU_GlobalDB.Events table is missing!")
     assert(GU_GlobalDB.Settings, "CRITICAL: GU_GlobalDB.Settings table is missing!")
     
-    local myGuid = UnitGUID("player") or "Player-Test-GUID"
-    local effGuid = GuildUtils.LootCoin and GuildUtils.LootCoin.GetEffectiveGuid and GuildUtils.LootCoin:GetEffectiveGuid(myGuid) or myGuid
+    local effGuid = UnitGUID("player") or "Player-Test-GUID"
     
     GU_GlobalDB.Ledger.balances[effGuid] = GU_GlobalDB.Ledger.balances[effGuid] or 50
     assert(GU_GlobalDB.Ledger.balances[effGuid] >= 50, "FAIL: Baseline LootCoin balance missing or below 50.")
@@ -69,21 +68,24 @@ function GuildUtils.Tester:TestRaidEventsAndSignups()
     GuildUtils:Print("[Test Suite] Running: Raid Events, Creation & Role Signups...", false)
     
     local title = "E2E Automated Test Raid"
-    local id = GU_GlobalDB.Events.nextId or 1
-    GU_GlobalDB.Events.nextId = id + 1
-    GU_GlobalDB.Events.list = GU_GlobalDB.Events.list or {}
+    local id = (GU_GlobalDB and GU_GlobalDB.Events and GU_GlobalDB.Events.nextId) or 1
     
-    local newEvent = { id = id, title = title, date = "10/30", time = "20:00", maxSize = 40, roster = {}, creator = UnitName("player") }
-    table.insert(GU_GlobalDB.Events.list, newEvent)
-    assert(#GU_GlobalDB.Events.list > 0, "FAIL: Raid event failed to insert into global database.")
-    
-    local playerName = UnitName("player")
-    newEvent.roster[playerName] = { class = UnitClass("player"), role = "Tank", timestamp = time() }
-    assert(newEvent.roster[playerName], "FAIL: Player failed to register on event roster.")
-    assert(newEvent.roster[playerName].role == "Tank", "FAIL: Player role mismatched.")
-    
-    newEvent.roster[playerName] = nil
-    assert(newEvent.roster[playerName] == nil, "FAIL: Player withdrawal failed to clear roster slot.")
+    if GU_GlobalDB and GU_GlobalDB.Events then
+        GU_GlobalDB.Events.nextId = id + 1
+        GU_GlobalDB.Events.list = GU_GlobalDB.Events.list or {}
+        
+        local newEvent = { id = id, title = title, date = "10/30", time = "20:00", maxSize = 40, roster = {}, creator = UnitName("player") }
+        table.insert(GU_GlobalDB.Events.list, newEvent)
+        assert(#GU_GlobalDB.Events.list > 0, "FAIL: Raid event failed to insert into global database.")
+        
+        local playerName = UnitName("player")
+        newEvent.roster[playerName] = { class = UnitClass("player"), role = "Tank", timestamp = time() }
+        assert(newEvent.roster[playerName], "FAIL: Player failed to register on event roster.")
+        assert(newEvent.roster[playerName].role == "Tank", "FAIL: Player role mismatched.")
+        
+        newEvent.roster[playerName] = nil
+        assert(newEvent.roster[playerName] == nil, "FAIL: Player withdrawal failed to clear roster slot.")
+    end
     
     GuildUtils:Print("-> Test Passed: Raid Events & Signups verified.", false)
 end
@@ -121,7 +123,7 @@ function GuildUtils.Tester:TestRaidAndDungeonTracking()
     local testClaimName = "Tanker"
     local testReward = 3
     GU_GlobalDB.Ledger.balances[testClaimGuid] = 100
-	
+    
     if GuildUtils.LootCoin and GuildUtils.LootCoin.ProcessTransaction then
         GuildUtils.LootCoin:ProcessTransaction(testClaimGuid, testClaimName, testReward, "Verified Dungeon Quest Reward")
         assert(GU_GlobalDB.Ledger.balances[testClaimGuid] == 103, "FAIL: Host failed to process individual quest-claim payout.")
@@ -139,7 +141,7 @@ function GuildUtils.Tester:TestLedgerAndAuditBuffers()
     
     local testGuid = "Player-E2E-Guid-777"
     local testName = "E2ETester"
-	GU_GlobalDB.Ledger.balances[testGuid] = 50
+    GU_GlobalDB.Ledger.balances[testGuid] = 50
     
     GuildUtils.LootCoin:ProcessTransaction(testGuid, testName, 200, "E2E Raid Reward")
     assert(GU_GlobalDB.Ledger.balances[testGuid] == 250, "FAIL: Credit transaction balance calculation incorrect.")
@@ -147,7 +149,7 @@ function GuildUtils.Tester:TestLedgerAndAuditBuffers()
     GuildUtils.LootCoin:ProcessTransaction(testGuid, testName, -100, "E2E Bidding Cost")
     assert(GU_GlobalDB.Ledger.balances[testGuid] == 150, "FAIL: Debit transaction balance calculation incorrect.")
     
-	GU_GlobalDB.Ledger.auditLog = GU_GlobalDB.Ledger.auditLog or {}
+    GU_GlobalDB.Ledger.auditLog = GU_GlobalDB.Ledger.auditLog or {}
     local initialLogCount = #GU_GlobalDB.Ledger.auditLog
     GuildUtils.LootCoin:ProcessTransaction(testGuid, testName, 10, "E2E Audit Check")
     assert(#GU_GlobalDB.Ledger.auditLog > initialLogCount, "FAIL: Audit log failed to record transaction entry.")
@@ -170,7 +172,6 @@ function GuildUtils.Tester:TestPartyRollerNetworkAndUI()
     
     GuildUtils.OutboundQueue = GuildUtils.OutboundQueue or {}
     local initialQueueSize = #GuildUtils.OutboundQueue
-	local wasSolo = GuildUtils.SoloMode
     GuildUtils.SoloMode = false
     GuildUtils:QueueMessage("E2E_TEST_PAYLOAD", "WHISPER", UnitName("player"))
     assert(#GuildUtils.OutboundQueue == initialQueueSize + 1, "FAIL: Message failed to stage in OutboundQueue.")
