@@ -142,6 +142,9 @@ function GuildUtils.Contracts:InitializeDB()
     if not GU_GlobalDB.Contracts then
         GU_GlobalDB.Contracts = { list = {}, nextId = 1 }
     end
+    if not GU_GlobalDB.Contracts.list then
+        GU_GlobalDB.Contracts.list = {}
+    end
     
     if #GU_GlobalDB.Contracts.list == 0 then
         local eligibleWeekly = self:FilterEligibleQuests(self.RecurringQuests.Weekly)
@@ -151,16 +154,20 @@ function GuildUtils.Contracts:InitializeDB()
         for i = 1, math.min(5, #eligibleWeekly) do
             local q = eligibleWeekly[i]
             local titleText = q.item and string.format("Weekly: %dx %s", q.count, q.item) or q.name
+            local targetVal = q.count or q.countReq or q.runsRequired or 1
+            
             table.insert(GU_GlobalDB.Contracts.list, {
                 id = GU_GlobalDB.Contracts.nextId,
                 title = titleText,
-                targetCount = q.count or q.runsRequired or 1,
+                type = q.type,
+                target = q.target,
+                targetCount = targetVal,
                 currentProgress = 0,
                 reward = q.reward,
                 completed = false,
                 creatorName = "SYSTEM",
                 isGuildQuest = true,
-                period = "Weekly" -- NEW: Added for rollover tracking
+                period = "Weekly"
             })
             GU_GlobalDB.Contracts.nextId = GU_GlobalDB.Contracts.nextId + 1
         end
@@ -169,16 +176,20 @@ function GuildUtils.Contracts:InitializeDB()
         for i = 1, math.min(3, #eligibleMonthly) do
             local q = eligibleMonthly[i]
             local titleText = q.item and string.format("Monthly: %dx %s", q.count, q.item) or q.name
+            local targetVal = q.count or q.countReq or q.runsRequired or 1
+            
             table.insert(GU_GlobalDB.Contracts.list, {
                 id = GU_GlobalDB.Contracts.nextId,
                 title = titleText,
-                targetCount = q.count or q.runsRequired or 1,
+                type = q.type,
+                target = q.target,
+                targetCount = targetVal,
                 currentProgress = 0,
                 reward = q.reward,
                 completed = false,
                 creatorName = "SYSTEM",
                 isGuildQuest = true,
-                period = "Monthly" -- NEW: Added for rollover tracking
+                period = "Monthly"
             })
             GU_GlobalDB.Contracts.nextId = GU_GlobalDB.Contracts.nextId + 1
         end
@@ -388,7 +399,9 @@ function GuildUtils.Contracts:UpdateBoard()
     self.Container.childLeft:SetHeight(math.max(200, math.abs(yOffset)))
 end
 
--- ============================================================================ -- RECEIVER FULFILLMENT HOOKS (MAIL & TRADE SIGN-OFF) -- ============================================================================
+-- ============================================================================
+-- RECEIVER FULFILLMENT HOOKS (MAIL & TRADE SIGN-OFF)
+-- ============================================================================
 
 local mailMonitor = CreateFrame("Frame")
 mailMonitor:RegisterEvent("MAIL_INBOX_UPDATE")
@@ -408,14 +421,13 @@ mailMonitor:SetScript("OnEvent", function(self, event)
                         if contract.currentProgress >= contract.targetCount then
                             contract.completed = true
                             if GuildUtils.LootCoin and GuildUtils.LootCoin.ProcessTransaction then
-                                local senderGuid = UnitGUID("player") -- Fallback or parsed sender
+                                local senderGuid = UnitGUID("player")
                                 GuildUtils.LootCoin:ProcessTransaction(senderGuid, sender, contract.reward, "Bounty Completed: " .. contract.title)
                             end
                             GuildUtils:Print(string.format("Contract #%d fulfilled by %s! Reward issued.", cIDNum, sender), false)
                         else
                             GuildUtils:Print(string.format("Contract #%d progress updated (+%d) by %s (%d/%d).", cIDNum, count or 1, sender, contract.currentProgress, contract.targetCount), false)
                         end
-                        -- Broadcast progress sync to network
                         GuildUtils:QueueMessage(string.format("CONTRACT_PROGRESS:%d:%d", cIDNum, contract.currentProgress), "GUILD")
                         if GuildUtils.Contracts.UpdateBoard then GuildUtils.Contracts:UpdateBoard() end
                         break
@@ -456,9 +468,8 @@ function GuildUtils.Contracts:ProgressQuestType(qType, targetName, amount)
     end
 end
 
--- 1. Dungeon Quest Validation (Triggered by InstanceJournal)
 function GuildUtils.Contracts:ValidateDungeonRun(instanceName, bossKills, isRaid)
-    if isRaid then return end -- Ignoring raid events
+    if isRaid then return end
     if not GU_GlobalDB or not GU_GlobalDB.InstanceJournal then return end
     
     local entry = GU_GlobalDB.InstanceJournal[instanceName]
@@ -469,202 +480,6 @@ function GuildUtils.Contracts:ValidateDungeonRun(instanceName, bossKills, isRaid
     end
 end
 
--- 2. PvP & Battleground Tracking
--- 2. PvP & Battleground Tracking (With Honor Delta Fix)
-local pvpTracker = CreateFrame("Frame")
-pvpTracker:RegisterEvent("UPDATE_BATTLEFIELD_STATUS")
-pvpTracker:RegisterEvent("HONOR_XP_UPDATE")
-pvpTracker:RegisterEvent("PLAYER_ENTERING_WORLD") -- To initialize baseline honor
-
-local lastKnownHonor = 0
-
-pvpTracker:SetScript("OnEvent", function(self, event, ...)
-    if event == "PLAYER_ENTERING_WORLD" then
-        lastKnownHonor = UnitHonor("player") or 0
-        
-    elseif event == "UPDATE_BATTLEFIELD_STATUS" then
-        local bgIndex = ...
-        local status, mapName = GetBattlefieldStatus(bgIndex)
-        if status == "active" then
-            self.activeBG = mapName
-        elseif status == "none" and self.activeBG then
-            local winner = GetBattlefieldWinner()
-            if winner ~= nil then 
-                GuildUtils.Contracts:ProgressQuestType("PVP_SESSION", self.activeBG, 1)
-            end
-            self.activeBG = nil
-        end
-        
-    elseif event == "HONOR_XP_UPDATE" then
-        local currentHonor = UnitHonor("player") or 0
-        local honorGained = 0
-        
-        if currentHonor > lastKnownHonor then
-            -- Normal gain
-            honorGained = currentHonor - lastKnownHonor
-        elseif currentHonor < lastKnownHonor then
-            -- A weekly server reset occurred; honor wiped to 0 and started over
-            honorGained = currentHonor
-        end
-        
-        lastKnownHonor = currentHonor
-        
-        if honorGained > 0 and GU_GlobalDB and GU_GlobalDB.Contracts then
-            -- We push the delta (honorGained) to our Progress function
-            -- We use a dummy target name "Honor" to match the PVP_HONOR type
-            GuildUtils.Contracts:ProgressQuestType("PVP_HONOR", "Honor", honorGained)
-        end
-    end
-end)
-
--- 3. Face-to-Face Trade Tracking (Gathering Quests)
-local tradeTracker = CreateFrame("Frame")
-tradeTracker:RegisterEvent("TRADE_CLOSED")
-tradeTracker:RegisterEvent("TRADE_ACCEPT_UPDATE")
-
-local tradeAccepted = false
-tradeTracker:SetScript("OnEvent", function(self, event, playerAccepted, targetAccepted)
-    if event == "TRADE_ACCEPT_UPDATE" then
-        if playerAccepted and targetAccepted then 
-            tradeAccepted = true 
-        end
-    elseif event == "TRADE_CLOSED" then
-        if tradeAccepted then
-            GuildUtils:Print("|cFF00FF00[GuildUtils]|r Trade successful. Contracted items handed to an officer will be parsed and validated by their client.", false)
-        end
-        tradeAccepted = false
-    end
-end)
--- ============================================================================
--- ROLLOVER MANAGER (Weekly & Monthly Resets)
--- ============================================================================
-
--- Calculates the timestamp for the upcoming Tuesday at 8:00 AM
-function GuildUtils.Contracts:GetNextWeeklyReset()
-    local t = time()
-    local d = date("*t", t)
-    -- wday: 1=Sun, 2=Mon, 3=Tue, 4=Wed, 5=Thu, 6=Fri, 7=Sat
-    local daysToTuesday = (3 - d.wday) % 7
-    if daysToTuesday == 0 and d.hour >= 8 then
-        daysToTuesday = 7
-    end
-    -- os.time automatically normalizes out-of-range days/months
-    return time({year = d.year, month = d.month, day = d.day + daysToTuesday, hour = 8, min = 0, sec = 0})
-end
-
--- Calculates the timestamp for the 1st of the next month at 8:00 AM
-function GuildUtils.Contracts:GetNextMonthlyReset()
-    local d = date("*t", time())
-    local nextMonth = d.month + 1
-    local nextYear = d.year
-    if nextMonth > 12 then
-        nextMonth = 1
-        nextYear = nextYear + 1
-    end
-    return time({year = nextYear, month = nextMonth, day = 1, hour = 8, min = 0, sec = 0})
-end
-
-function GuildUtils.Contracts:CheckRollovers()
-    if not GU_GlobalDB or not GU_GlobalDB.Contracts then return end
-    
-    local currentTime = time()
-    local db = GU_GlobalDB.Contracts
-    local needsUpdate = false
-    
-    -- Check Weekly Rollover
-    if not db.nextWeeklyReset or currentTime >= db.nextWeeklyReset then
-        db.nextWeeklyReset = self:GetNextWeeklyReset()
-        
-        -- Safely purge old weekly system quests (iterating backwards to prevent shifting issues)
-        if db.list then
-            for i = #db.list, 1, -1 do
-                if db.list[i].isGuildQuest and db.list[i].period == "Weekly" then
-                    table.remove(db.list, i)
-                end
-            end
-        end
-        needsUpdate = true
-        GuildUtils:Print("Weekly server reset detected. Refreshing Weekly Bounty Board...", false)
-    end
-    
-    -- Check Monthly Rollover
-    if not db.nextMonthlyReset or currentTime >= db.nextMonthlyReset then
-        db.nextMonthlyReset = self:GetNextMonthlyReset()
-        
-        -- Safely purge old monthly system quests
-        if db.list then
-            for i = #db.list, 1, -1 do
-                if db.list[i].isGuildQuest and db.list[i].period == "Monthly" then
-                    table.remove(db.list, i)
-                end
-            end
-        end
-        needsUpdate = true
-        GuildUtils:Print("Monthly server reset detected. Refreshing Monthly Bounty Board...", false)
-    end
-    
-    -- Repopulate missing quests and redraw the UI if a reset occurred
-    if needsUpdate then
-        self:InitializeDB() 
-        if self.UpdateBoard then self:UpdateBoard() end
-    end
-end
-
--- Run the rollover check quietly in the background when the player logs in
-local rolloverTracker = CreateFrame("Frame")
-rolloverTracker:RegisterEvent("PLAYER_LOGIN")
-rolloverTracker:SetScript("OnEvent", function()
-    C_Timer.After(5, function() 
-        if GuildUtils.Contracts.CheckRollovers then
-            GuildUtils.Contracts:CheckRollovers()
-        end
-    end)
-end)
--- ============================================================================
--- AUTOMATED QUEST TRACKING, ROLLOVER, & VALIDATION PIPELINES
--- ============================================================================
-
--- Base Completion Handlers
-function GuildUtils.Contracts:CompleteContract(contract)
-    contract.completed = true
-    if GuildUtils.LootCoin and GuildUtils.LootCoin.ProcessTransaction then
-        GuildUtils.LootCoin:ProcessTransaction(UnitGUID("player"), UnitName("player"), contract.reward, "Quest Completed: " .. contract.title)
-    end
-    GuildUtils:Print(string.format("Quest Completed! '%s' - Awarded %d LC.", contract.title, contract.reward), false)
-    GuildUtils:QueueMessage(string.format("CONTRACT_PROGRESS:%d:%d", contract.id, contract.currentProgress), "GUILD")
-    if self.UpdateBoard then self:UpdateBoard() end
-end
-
-function GuildUtils.Contracts:ProgressQuestType(qType, targetName, amount)
-    if not GU_GlobalDB or not GU_GlobalDB.Contracts then return end
-    for _, contract in ipairs(GU_GlobalDB.Contracts.list) do
-        if not contract.completed and contract.type == qType and (contract.target == targetName or string.find(targetName, contract.target)) then
-            contract.currentProgress = (contract.currentProgress or 0) + amount
-            if contract.currentProgress >= contract.targetCount then
-                self:CompleteContract(contract)
-            else
-                GuildUtils:Print(string.format("Quest Progress: %s (%d/%d)", contract.title, contract.currentProgress, contract.targetCount), false)
-                GuildUtils:QueueMessage(string.format("CONTRACT_PROGRESS:%d:%d", contract.id, contract.currentProgress), "GUILD")
-                if self.UpdateBoard then self:UpdateBoard() end
-            end
-        end
-    end
-end
-
--- Dungeon Quest Validation (Triggered by InstanceJournal module)
-function GuildUtils.Contracts:ValidateDungeonRun(instanceName, bossKills, isRaid)
-    if isRaid then return end -- Raid events are handled by the leader sign-off screen
-    if not GU_GlobalDB or not GU_GlobalDB.InstanceJournal then return end
-    
-    local entry = GU_GlobalDB.InstanceJournal[instanceName]
-    local minRequired = entry and entry.minBosses or 1
-    
-    if bossKills >= minRequired and bossKills > 0 then
-        self:ProgressQuestType("DUNGEON", instanceName, 1)
-    end
-end
-
--- PvP & Battleground Tracking (With Honor Delta Fix)
 local pvpTracker = CreateFrame("Frame")
 pvpTracker:RegisterEvent("UPDATE_BATTLEFIELD_STATUS")
 pvpTracker:RegisterEvent("HONOR_XP_UPDATE")
@@ -704,7 +519,24 @@ pvpTracker:SetScript("OnEvent", function(self, event, ...)
     end
 end)
 
--- Rollover Manager (Weekly/Monthly Resets)
+local tradeTracker = CreateFrame("Frame")
+tradeTracker:RegisterEvent("TRADE_CLOSED")
+tradeTracker:RegisterEvent("TRADE_ACCEPT_UPDATE")
+
+local tradeAccepted = false
+tradeTracker:SetScript("OnEvent", function(self, event, playerAccepted, targetAccepted)
+    if event == "TRADE_ACCEPT_UPDATE" then
+        if playerAccepted and targetAccepted then 
+            tradeAccepted = true 
+        end
+    elseif event == "TRADE_CLOSED" then
+        if tradeAccepted then
+            GuildUtils:Print("|cFF00FF00[GuildUtils]|r Trade successful. Contracted items handed to an officer will be parsed and validated by their client.", false)
+        end
+        tradeAccepted = false
+    end
+end)
+
 function GuildUtils.Contracts:GetNextWeeklyReset()
     local t = time()
     local d = date("*t", t)
