@@ -141,28 +141,15 @@ function GuildUtils.LootCoin:EndGroupEvent()
     local activeEventTitle = GU_GlobalDB.Ledger.ActiveSession.groupName or ""
     local linkedEventId = GU_GlobalDB.Ledger.ActiveSession.linkedEventId
     
-    -- FIXED: Utilize strictly accurate timestamp calculation for rescheduling dates
     if GU_GlobalDB and GU_GlobalDB.Events and GU_GlobalDB.Events.list then
         for _, ev in ipairs(GU_GlobalDB.Events.list) do
             if (linkedEventId and ev.id == linkedEventId) or (not linkedEventId and (ev.title == activeEventTitle or string.find(activeEventTitle, ev.title))) then
                 if ev.timestamp then
-                    ev.timestamp = ev.timestamp + 604800 -- Exactly 7 days in seconds
+                    ev.timestamp = ev.timestamp + 604800
                     ev.date = date("%m/%d", ev.timestamp)
+                    ev.time = date("%I:%M %p", ev.timestamp)
+                    ev.roster = {}
                     GuildUtils:Print(string.format("Raid event '%s' concluded. Rescheduled for %s.", ev.title, date("%b %d", ev.timestamp)), false)
-                elseif ev.date then
-                    local mm, dd = string.match(ev.date, "(%d+)/(%d+)")
-                    if mm and dd then
-                        local m = tonumber(mm)
-                        local d = tonumber(dd) + 7
-                        local daysInMonth = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31}
-                        if d > (daysInMonth[m] or 30) then
-                            d = d - (daysInMonth[m] or 30)
-                            m = m + 1
-                            if m > 12 then m = 1 end
-                        end
-                        ev.date = string.format("%02d/%02d", m, d)
-                        GuildUtils:Print(string.format("Raid event '%s' concluded. Rescheduled for %s.", ev.title, ev.date), false)
-                    end
                 end
                 break
             end
@@ -186,6 +173,11 @@ function GuildUtils.LootCoin:EndGroupEvent()
     
     GU_GlobalDB.Ledger.ActiveSession = nil
     
+    -- FIXED: Force the idle panel linked event selector back to "None" the moment EndGroupEvent is triggered
+    if GuildUtils.PartyRoller and GuildUtils.PartyRoller.ResetIdlePanel then
+        GuildUtils.PartyRoller:ResetIdlePanel()
+    end
+
     local isAuthHost = (GuildUtils.Host == UnitName("player")) or GuildUtils.SoloMode
     if isAuthHost then
         self:ProcessGroupMerge(payload)

@@ -72,7 +72,6 @@ function GuildUtils.PartyRoller:RefreshState()
     end
 end
 
--- FIXED: Completely wipe selection state and force dropdown text back to default
 function GuildUtils.PartyRoller:ResetIdlePanel()
     if not self.DashboardFrame then return end
     local c = self.DashboardFrame.GLContainer
@@ -82,6 +81,7 @@ function GuildUtils.PartyRoller:ResetIdlePanel()
         c.IdlePanel.selectedEventEarlyBonus = 0
         c.IdlePanel.nameInput:SetText("New Group Event")
         c.IdlePanel.eventDropdown:SetText("Link to Event: None")
+        c.IdlePanel.preventAutoLink = true
     end
 end
 
@@ -216,7 +216,6 @@ function GuildUtils.PartyRoller:InitializeUI()
                 for _, eventData in ipairs(GU_GlobalDB.Events.list) do
                     if eventData.timestamp then
                         local diff = eventData.timestamp - currentTime
-                        -- FIXED: Only show future events within a 30 minute window (exclude past/concluded raids)
                         if diff >= 0 and diff <= 1800 then
                             validEvents = validEvents + 1
                             local evName = string.format("%s (%s)", eventData.title, date("%I:%M %p", eventData.timestamp))
@@ -246,14 +245,35 @@ function GuildUtils.PartyRoller:InitializeUI()
             return GuildUtils:Print("You are not the leader/master looter.", true) 
         end
         
+        local linkedId = c.IdlePanel.selectedEventId
+        
+        -- FIXED: Cross-reference the linked event ID against scheduled events before starting
+        if linkedId then
+            local eventExists = false
+            if GU_GlobalDB and GU_GlobalDB.Events and GU_GlobalDB.Events.list then
+                for _, eventData in ipairs(GU_GlobalDB.Events.list) do
+                    if eventData.id == linkedId then
+                        eventExists = true
+                        break
+                    end
+                end
+            end
+            
+            if not eventExists then
+                GuildUtils:Print("Error: Selected linked event no longer exists or has concluded. Resetting selection.", true)
+                GuildUtils.PartyRoller:ResetIdlePanel()
+                return
+            end
+        end
+        
         local groupName = c.IdlePanel.nameInput:GetText()
         if groupName == "" then groupName = "New Group Event" end
         
-        local linkedId = c.IdlePanel.selectedEventId
         local basePay = c.IdlePanel.selectedEventBasePay
         local earlyBonus = c.IdlePanel.selectedEventEarlyBonus
         
         GuildUtils.LootCoin:StartGroupEvent(groupName, linkedId, basePay, earlyBonus)
+        GuildUtils.PartyRoller:ResetIdlePanel()
         GuildUtils.PartyRoller:SetUIState("HUB_PANEL")
     end)
 

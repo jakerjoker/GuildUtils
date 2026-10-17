@@ -644,7 +644,7 @@ function GuildUtils.Verification:ShowVerificationScreen(eventData, activeSession
         rowIndex = rowIndex + 1
     end
     
-    self.Frame.scrollChild:SetHeight(math.abs(yOffset))
+    self.Frame.scrollChild:SetHeight(math.max(300, math.abs(yOffset)))
     self.Frame:Show()
 end
 
@@ -691,13 +691,18 @@ function GuildUtils.Verification:ProcessSignOff()
         GuildUtils:Print("Event finalized. Approval sheet sent to Host for payout.", false)
     end
 
-    -- FIXED: Force the linked event selector back to "None" once sign-off is completed
+    self.CurrentEvent = nil
+    
+    -- FIXED: Instantly wipe out the Idle Panel's linked event state when Sign Off & Finish is clicked
     if GuildUtils.PartyRoller and GuildUtils.PartyRoller.ResetIdlePanel then
         GuildUtils.PartyRoller:ResetIdlePanel()
     end
+    
+    if GuildUtils.Events and GuildUtils.Events.UpdateEventList then
+        GuildUtils.Events:UpdateEventList()
+    end
 end
 
--- Fallback network processor for remote officers sending sign-offs to a distant Host
 local p2pListener = CreateFrame("Frame")
 p2pListener:RegisterEvent("CHAT_MSG_ADDON")
 p2pListener:SetScript("OnEvent", function(self, event, prefix, message, channel, sender)
